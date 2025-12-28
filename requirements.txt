@@ -1,0 +1,9 @@
+PyQt5==5.15.10
+PyQt5-Qt5==5.15.2
+PyQt5-sip==12.13.0
+opencv-python==4.8.1.78
+ultralytics==8.1.0
+numpy>=1.26.0,<2.0.0
+python-dotenv==1.0.0
+Pillow>=10.0.0
+
