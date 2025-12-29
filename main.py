@@ -230,7 +230,7 @@ class DroneDetectionApp:
         return True
     
     def process_frame(self):
-        """Process a single frame."""
+        """Process a single frame - display immediately, detection runs asynchronously."""
         if not self.is_running:
             return
         
@@ -249,6 +249,25 @@ class DroneDetectionApp:
         # Update camera status
         self.main_window.get_system_view().update_camera_status(True)
         
+        # CRITICAL: Display frame immediately with latest available detections (don't wait for detection)
+        # Get latest detection results (non-blocking, may be from older frame)
+        detections = self.latest_detections  # Use cached detections immediately
+        
+        # For now, predicted point and servo crosshair are None
+        # These will be implemented in Milestone 2 (Tracking & Prediction)
+        predicted_point = None
+        servo_crosshair = None
+        
+        # Update operator view IMMEDIATELY with current frame and latest detections
+        # This ensures smooth display regardless of detection speed
+        self.main_window.get_operator_view().update_frame(
+            frame,
+            detections,
+            predicted_point,
+            servo_crosshair
+        )
+        
+        # Now handle detection asynchronously (non-blocking)
         # Frame skipping: only run detection every N frames
         self.frame_counter += 1
         should_detect = (self.frame_counter % Config.DETECTION_FRAME_SKIP == 0)
@@ -258,48 +277,34 @@ class DroneDetectionApp:
             self.detection_thread.add_frame(frame)
             self.detection_fps_count += 1
         
-        # Get latest detection results (non-blocking)
+        # Get latest detection results (non-blocking) and update cache
         if self.detection_thread:
-            frame_id, detections = self.detection_thread.get_latest_result()
+            frame_id, new_detections = self.detection_thread.get_latest_result()
             if frame_id is not None and frame_id != self.last_detection_frame_id:
-                self.latest_detections = detections
+                # Update cached detections for next frame display
+                self.latest_detections = new_detections
                 self.last_detection_frame_id = frame_id
-                # Update detection status
-                self.main_window.get_system_view().update_detection_status(len(detections) > 0)
-        
-        # Use latest detections (or empty if none available)
-        detections = self.latest_detections
-        
-        # Check for blacklist detections
-        blacklist_detections = self.detector.get_blacklist_detections(detections)
-        if blacklist_detections:
-            # Threat detected
-            det = blacklist_detections[0]
-            color_info = f" ({det.color_class})" if det.color_class else ""
-            self.main_window.get_system_view().add_alert(
-                f"THREAT DETECTED: {det.class_name}{color_info} at ({det.x}, {det.y})",
-                "THREAT"
-            )
-        elif len(detections) > 0 and len(blacklist_detections) == 0:
-            # Only whitelist detected
-            det = detections[0]
-            self.main_window.get_system_view().add_alert(
-                f"Whitelist object detected: {det.class_name}",
-                "INFO"
-            )
-        
-        # For now, predicted point and servo crosshair are None
-        # These will be implemented in Milestone 2 (Tracking & Prediction)
-        predicted_point = None
-        servo_crosshair = None
-        
-        # Update operator view
-        self.main_window.get_operator_view().update_frame(
-            frame,
-            detections,
-            predicted_point,
-            servo_crosshair
-        )
+                
+                # Update detection status (non-blocking UI update)
+                self.main_window.get_system_view().update_detection_status(len(new_detections) > 0)
+                
+                # Check for blacklist detections and add alerts (non-blocking)
+                blacklist_detections = self.detector.get_blacklist_detections(new_detections)
+                if blacklist_detections:
+                    # Threat detected
+                    det = blacklist_detections[0]
+                    color_info = f" ({det.color_class})" if det.color_class else ""
+                    self.main_window.get_system_view().add_alert(
+                        f"THREAT DETECTED: {det.class_name}{color_info} at ({det.x}, {det.y})",
+                        "THREAT"
+                    )
+                elif len(new_detections) > 0 and len(blacklist_detections) == 0:
+                    # Only whitelist detected
+                    det = new_detections[0]
+                    self.main_window.get_system_view().add_alert(
+                        f"Whitelist object detected: {det.class_name}",
+                        "INFO"
+                    )
         
         # Update FPS (separate tracking for display and detection)
         self.display_fps_count += 1
