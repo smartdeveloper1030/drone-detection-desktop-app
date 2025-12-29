@@ -218,6 +218,19 @@ class DetectionModule:
         self.confidence_threshold = Config.YOLO_CONFIDENCE_THRESHOLD
         self.iou_threshold = Config.YOLO_IOU_THRESHOLD
         self.color_classifier = ColorClassifier()
+    
+    def set_confidence_threshold(self, threshold: float):
+        """
+        Update the confidence threshold dynamically.
+        
+        Args:
+            threshold: New confidence threshold value (0.0 to 1.0)
+        """
+        if 0.0 <= threshold <= 1.0:
+            self.confidence_threshold = threshold
+            logger.info(f"Confidence threshold updated to {threshold:.2f}")
+        else:
+            logger.warning(f"Invalid confidence threshold: {threshold}. Must be between 0.0 and 1.0")
         
     def load_model(self) -> bool:
         """

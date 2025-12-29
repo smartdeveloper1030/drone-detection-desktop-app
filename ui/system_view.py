@@ -2,7 +2,8 @@
 System View - System status, alerts, and configuration display.
 """
 from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, 
-                             QTextEdit, QGroupBox, QGridLayout, QPushButton)
+                             QTextEdit, QGroupBox, QGridLayout, QPushButton,
+                             QDoubleSpinBox)
 from PyQt5.QtCore import Qt, QTimer, pyqtSignal
 from PyQt5.QtGui import QColor, QPalette, QFont
 from datetime import datetime
@@ -12,6 +13,9 @@ from config import Config
 
 class SystemView(QWidget):
     """System view showing status, alerts, and configuration."""
+    
+    # Signal emitted when confidence threshold changes
+    confidence_threshold_changed = pyqtSignal(float)  # Emits new threshold value
     
     def __init__(self, parent=None):
         """Initialize the system view."""
@@ -115,9 +119,30 @@ class SystemView(QWidget):
         conf_label = QLabel("Confidence Threshold:")
         conf_label.setStyleSheet("color: white;")
         config_layout.addWidget(conf_label, 3, 0)
-        conf_value = QLabel(f"{Config.YOLO_CONFIDENCE_THRESHOLD:.2f}")
-        conf_value.setStyleSheet("color: white;")
-        config_layout.addWidget(conf_value, 3, 1)
+        self.conf_threshold_spinbox = QDoubleSpinBox()
+        self.conf_threshold_spinbox.setMinimum(0.0)
+        self.conf_threshold_spinbox.setMaximum(1.0)
+        self.conf_threshold_spinbox.setSingleStep(0.05)
+        self.conf_threshold_spinbox.setDecimals(2)
+        self.conf_threshold_spinbox.setValue(Config.YOLO_CONFIDENCE_THRESHOLD)
+        self.conf_threshold_spinbox.setStyleSheet("""
+            QDoubleSpinBox {
+                background-color: #3b3b3b;
+                color: white;
+                border: 1px solid #555;
+                border-radius: 4px;
+                padding: 5px;
+                min-width: 80px;
+            }
+            QDoubleSpinBox:hover {
+                background-color: #444;
+            }
+            QDoubleSpinBox:focus {
+                border: 1px solid #777;
+            }
+        """)
+        self.conf_threshold_spinbox.valueChanged.connect(self._on_confidence_threshold_changed)
+        config_layout.addWidget(self.conf_threshold_spinbox, 3, 1)
         
         config_group.setLayout(config_layout)
         main_layout.addWidget(config_group)
@@ -261,4 +286,14 @@ class SystemView(QWidget):
         """Clear the alert log."""
         self.alert_log.clear()
         self.alert_text.clear()
+    
+    def _on_confidence_threshold_changed(self, value: float):
+        """Handle confidence threshold change."""
+        self.confidence_threshold_changed.emit(value)
+    
+    def set_confidence_threshold(self, value: float):
+        """Set confidence threshold value programmatically."""
+        self.conf_threshold_spinbox.blockSignals(True)
+        self.conf_threshold_spinbox.setValue(value)
+        self.conf_threshold_spinbox.blockSignals(False)
 

@@ -160,6 +160,9 @@ class DroneDetectionApp:
         # Connect mode change signal
         self.main_window.mode_changed.connect(self._on_mode_changed)
         
+        # Connect confidence threshold change signal
+        self.main_window.get_system_view().confidence_threshold_changed.connect(self._on_confidence_threshold_changed)
+        
         # Processing state
         self.is_running = False
         self.frame_timer = QTimer()
@@ -281,6 +284,21 @@ class DroneDetectionApp:
         )
         
         logger.info(f"Detection mode changed to {mode} successfully")
+    
+    def _on_confidence_threshold_changed(self, threshold: float):
+        """
+        Handle confidence threshold change from UI.
+        
+        Args:
+            threshold: New confidence threshold value (0.0 to 1.0)
+        """
+        logger.info(f"Confidence threshold changed to: {threshold:.2f}")
+        self.detector.set_confidence_threshold(threshold)
+        # Update config for persistence
+        Config.YOLO_CONFIDENCE_THRESHOLD = threshold
+        self.main_window.get_system_view().add_alert(
+            f"Confidence threshold updated to {threshold:.2f}", "INFO"
+        )
     
     def process_frame(self):
         """Process a single frame - display immediately, detection runs asynchronously."""
