@@ -36,37 +36,49 @@ class SystemView(QWidget):
         status_layout = QGridLayout()
         
         # Heartbeat indicator
-        status_layout.addWidget(QLabel("Heartbeat:"), 0, 0)
+        heartbeat_label = QLabel("Heartbeat:")
+        heartbeat_label.setStyleSheet("color: white;")
+        status_layout.addWidget(heartbeat_label, 0, 0)
         self.heartbeat_label = QLabel("●")
         self.heartbeat_label.setStyleSheet("color: red; font-size: 20px;")
         status_layout.addWidget(self.heartbeat_label, 0, 1)
         
         # E-Stop status
-        status_layout.addWidget(QLabel("E-Stop:"), 1, 0)
+        estop_label = QLabel("E-Stop:")
+        estop_label.setStyleSheet("color: white;")
+        status_layout.addWidget(estop_label, 1, 0)
         self.estop_label = QLabel("ACTIVE")
         self.estop_label.setStyleSheet("color: red; font-weight: bold;")
         status_layout.addWidget(self.estop_label, 1, 1)
         
         # Camera status
-        status_layout.addWidget(QLabel("Camera:"), 2, 0)
+        camera_label = QLabel("Camera:")
+        camera_label.setStyleSheet("color: white;")
+        status_layout.addWidget(camera_label, 2, 0)
         self.camera_status_label = QLabel("Disconnected")
         self.camera_status_label.setStyleSheet("color: red;")
         status_layout.addWidget(self.camera_status_label, 2, 1)
         
         # Detection status
-        status_layout.addWidget(QLabel("Detection:"), 3, 0)
+        detection_label = QLabel("Detection:")
+        detection_label.setStyleSheet("color: white;")
+        status_layout.addWidget(detection_label, 3, 0)
         self.detection_status_label = QLabel("Inactive")
         self.detection_status_label.setStyleSheet("color: yellow;")
         status_layout.addWidget(self.detection_status_label, 3, 1)
         
         # Mode
-        status_layout.addWidget(QLabel("Mode:"), 4, 0)
+        mode_label = QLabel("Mode:")
+        mode_label.setStyleSheet("color: white;")
+        status_layout.addWidget(mode_label, 4, 0)
         self.mode_label = QLabel("Drone/Balloon")
         self.mode_label.setStyleSheet("color: white;")
         status_layout.addWidget(self.mode_label, 4, 1)
         
         # Prediction horizon
-        status_layout.addWidget(QLabel("Prediction Horizon:"), 5, 0)
+        prediction_label = QLabel("Prediction Horizon:")
+        prediction_label.setStyleSheet("color: white;")
+        status_layout.addWidget(prediction_label, 5, 0)
         self.prediction_horizon_label = QLabel("0 ms")
         self.prediction_horizon_label.setStyleSheet("color: white;")
         status_layout.addWidget(self.prediction_horizon_label, 5, 1)
@@ -78,23 +90,34 @@ class SystemView(QWidget):
         config_group = QGroupBox("Configuration")
         config_layout = QGridLayout()
         
-        config_layout.addWidget(QLabel("Test Mode:"), 0, 0)
+        test_mode_label = QLabel("Test Mode:")
+        test_mode_label.setStyleSheet("color: white;")
+        config_layout.addWidget(test_mode_label, 0, 0)
         test_mode_text = "Enabled" if Config.TEST_OPTION else "Disabled"
-        test_mode_label = QLabel(test_mode_text)
-        test_mode_label.setStyleSheet("color: yellow;" if Config.TEST_OPTION else "color: green;")
-        config_layout.addWidget(test_mode_label, 0, 1)
+        test_mode_value = QLabel(test_mode_text)
+        test_mode_value.setStyleSheet("color: yellow;" if Config.TEST_OPTION else "color: green;")
+        config_layout.addWidget(test_mode_value, 0, 1)
         
-        config_layout.addWidget(QLabel("Camera Type:"), 1, 0)
-        camera_type_label = QLabel(Config.CAMERA_TYPE.upper())
-        config_layout.addWidget(camera_type_label, 1, 1)
+        camera_type_label = QLabel("Camera Type:")
+        camera_type_label.setStyleSheet("color: white;")
+        config_layout.addWidget(camera_type_label, 1, 0)
+        camera_type_value = QLabel(Config.CAMERA_TYPE.upper())
+        camera_type_value.setStyleSheet("color: white;")
+        config_layout.addWidget(camera_type_value, 1, 1)
         
-        config_layout.addWidget(QLabel("YOLO Model:"), 2, 0)
+        yolo_model_label = QLabel("YOLO Model:")
+        yolo_model_label.setStyleSheet("color: white;")
+        config_layout.addWidget(yolo_model_label, 2, 0)
         model_label = QLabel(Config.YOLO_MODEL_PATH)
+        model_label.setStyleSheet("color: white;")
         config_layout.addWidget(model_label, 2, 1)
         
-        config_layout.addWidget(QLabel("Confidence Threshold:"), 3, 0)
-        conf_label = QLabel(f"{Config.YOLO_CONFIDENCE_THRESHOLD:.2f}")
-        config_layout.addWidget(conf_label, 3, 1)
+        conf_label = QLabel("Confidence Threshold:")
+        conf_label.setStyleSheet("color: white;")
+        config_layout.addWidget(conf_label, 3, 0)
+        conf_value = QLabel(f"{Config.YOLO_CONFIDENCE_THRESHOLD:.2f}")
+        conf_value.setStyleSheet("color: white;")
+        config_layout.addWidget(conf_value, 3, 1)
         
         config_group.setLayout(config_layout)
         main_layout.addWidget(config_group)
@@ -106,11 +129,27 @@ class SystemView(QWidget):
         self.alert_text = QTextEdit()
         self.alert_text.setReadOnly(True)
         self.alert_text.setMaximumHeight(200)
-        self.alert_text.setStyleSheet("background-color: #1e1e1e; color: #ffffff;")
+        self.alert_text.setStyleSheet("background-color: #1e1e1e; color: #00ff00;")  # Green text
         alerts_layout.addWidget(self.alert_text)
         
         # Clear button
         clear_button = QPushButton("Clear Log")
+        clear_button.setStyleSheet("""
+            QPushButton {
+                background-color: #3b3b3b;
+                color: white;
+                border: 1px solid #555;
+                border-radius: 4px;
+                padding: 5px 15px;
+                font-size: 12px;
+            }
+            QPushButton:hover {
+                background-color: #444;
+            }
+            QPushButton:pressed {
+                background-color: #555;
+            }
+        """)
         clear_button.clicked.connect(self.clear_alerts)
         alerts_layout.addWidget(clear_button)
         
@@ -120,7 +159,7 @@ class SystemView(QWidget):
         main_layout.addStretch()
         self.setLayout(main_layout)
         
-        # Set dark theme
+        # Set dark theme with white text
         self.setStyleSheet("""
             QGroupBox {
                 font-weight: bold;
@@ -128,11 +167,16 @@ class SystemView(QWidget):
                 border-radius: 5px;
                 margin-top: 10px;
                 padding-top: 10px;
+                color: white;
             }
             QGroupBox::title {
                 subcontrol-origin: margin;
                 left: 10px;
                 padding: 0 5px;
+                color: white;
+            }
+            QLabel {
+                color: white;
             }
         """)
     
@@ -192,12 +236,12 @@ class SystemView(QWidget):
         
         # Color coding
         color_map = {
-            "INFO": "#ffffff",
-            "WARNING": "#ffaa00",
-            "ERROR": "#ff0000",
-            "THREAT": "#ff0080"
+            "INFO": "#00ff00",  # Green
+            "WARNING": "#ffaa00",  # Orange (keep for visibility)
+            "ERROR": "#ff0000",  # Red (keep for visibility)
+            "THREAT": "#ff0080"  # Pink (keep for visibility)
         }
-        color = color_map.get(alert_type, "#ffffff")
+        color = color_map.get(alert_type, "#00ff00")  # Default to green
         
         alert_text = f'<span style="color: {color};">[{timestamp}] [{alert_type}] {message}</span>'
         self.alert_log.append(alert_text)

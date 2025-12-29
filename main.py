@@ -157,6 +157,9 @@ class DroneDetectionApp:
         self.camera = CameraModule()
         self.detector = DetectionModule()
         
+        # Connect mode change signal
+        self.main_window.mode_changed.connect(self._on_mode_changed)
+        
         # Processing state
         self.is_running = False
         self.frame_timer = QTimer()
@@ -223,8 +226,61 @@ class DroneDetectionApp:
         self.frame_timer.start(frame_interval)
         self.is_running = True
         
+        # Set initial mode in UI
+        self.main_window.set_mode(Config.DETECT_MODE)
+        
         logger.info("Initialization complete")
         return True
+    
+    def _on_mode_changed(self, mode: str):
+        """
+        Handle detection mode change from UI.
+        
+        Args:
+            mode: "balloon" or "drone"
+        """
+        logger.info(f"Detection mode changed to: {mode}")
+        
+        # Update config
+        Config.DETECT_MODE = mode
+        
+        # Stop current detection thread
+        if self.detection_thread and self.detection_thread.is_alive():
+            logger.info("Stopping current detection thread...")
+            self.detection_thread.stop()
+            self.detection_thread.join(timeout=2.0)
+            self.detection_thread = None
+        
+        # Clear current detections
+        self.latest_detections = []
+        self.last_detection_frame_id = -1
+        
+        # Reload model with new mode
+        logger.info(f"Reloading model for {mode} mode...")
+        if not self.detector.load_model():
+            logger.error(f"Failed to load model for {mode} mode")
+            self.main_window.get_system_view().add_alert(
+                f"Failed to load model for {mode} mode", "ERROR"
+            )
+            return
+        
+        # Warmup new model
+        logger.info("Warming up new model...")
+        self.detector.warmup()
+        
+        # Restart detection thread
+        self.detection_thread = DetectionThread(
+            self.detector,
+            max_queue_size=Config.DETECTION_QUEUE_SIZE
+        )
+        self.detection_thread.start()
+        
+        # Update system view
+        self.main_window.get_system_view().add_alert(
+            f"Detection mode changed to: {mode.capitalize()}", "INFO"
+        )
+        
+        logger.info(f"Detection mode changed to {mode} successfully")
     
     def process_frame(self):
         """Process a single frame - display immediately, detection runs asynchronously."""
