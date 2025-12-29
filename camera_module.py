@@ -71,7 +71,13 @@ class CameraModule:
             actual_height = int(self.cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
             actual_fps = self.cap.get(cv2.CAP_PROP_FPS)
             
-            logger.info(f"Camera connected: {actual_width}x{actual_height} @ {actual_fps} FPS")
+            # Store actual FPS for synchronization
+            self.actual_fps = actual_fps if actual_fps > 0 else self.fps
+            # If FPS is 0 or invalid, use configured FPS or default to 30
+            if self.actual_fps <= 0:
+                self.actual_fps = self.fps if self.fps > 0 else 30.0
+            
+            logger.info(f"Camera connected: {actual_width}x{actual_height} @ {self.actual_fps} FPS")
             self.is_running = True
             return True
             

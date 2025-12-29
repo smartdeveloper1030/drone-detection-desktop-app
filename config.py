@@ -49,6 +49,11 @@ class Config:
     UI_REFRESH_RATE: int = int(os.getenv("UI_REFRESH_RATE", "30"))
     UI_SHOW_FPS: bool = os.getenv("UI_SHOW_FPS", "true").lower() == "true"
     
+    # Performance Optimization
+    DETECTION_FRAME_SKIP: int = int(os.getenv("DETECTION_FRAME_SKIP", "10"))  # Run detection every N frames
+    DETECTION_QUEUE_SIZE: int = int(os.getenv("DETECTION_QUEUE_SIZE", "2"))  # Max frames in detection queue
+    COLOR_CACHE_SIZE: int = int(os.getenv("COLOR_CACHE_SIZE", "50"))  # Color classification cache size
+    
     @classmethod
     def get_camera_source(cls) -> Optional[str]:
         """Get the camera source based on configuration."""

@@ -66,7 +66,8 @@ class Detection:
 
 
 class ColorClassifier:
-    """Classifies balloon colors for whitelist/blacklist determination."""
+    """Classifies balloon colors for whitelist/blacklist determination.
+    Optimized with pixel sampling, ROI subsampling, and caching."""
     
     # Color ranges in HSV
     COLOR_RANGES = {
@@ -79,10 +80,35 @@ class ColorClassifier:
         'yellow': ([25, 100, 100], [35, 255, 255]),
     }
     
+    # Cache for recent color classifications (LRU)
+    _color_cache = {}
+    _cache_access_order = []
+    _max_cache_size = Config.COLOR_CACHE_SIZE
+    
+    @classmethod
+    def _get_cache_key(cls, bbox: Tuple[int, int, int, int]) -> str:
+        """Generate cache key from bounding box (rounded to reduce cache misses)."""
+        x1, y1, x2, y2 = bbox
+        return f"{x1//10}_{y1//10}_{x2//10}_{y2//10}"
+    
+    @classmethod
+    def _update_cache(cls, cache_key: str, color: Optional[str]):
+        """Update LRU cache."""
+        if cache_key in cls._color_cache:
+            cls._cache_access_order.remove(cache_key)
+        elif len(cls._color_cache) >= cls._max_cache_size:
+            # Evict least recently used
+            lru_key = cls._cache_access_order.pop(0)
+            del cls._color_cache[lru_key]
+        
+        cls._color_cache[cache_key] = color
+        cls._cache_access_order.append(cache_key)
+    
     @classmethod
     def classify_color(cls, frame: np.ndarray, bbox: Tuple[int, int, int, int]) -> Optional[str]:
         """
         Classify the color of a balloon in the bounding box.
+        Optimized with pixel sampling, ROI subsampling, and caching.
         
         Args:
             frame: Input frame (BGR)
@@ -91,6 +117,15 @@ class ColorClassifier:
         Returns:
             str: Color name or None
         """
+        # Check cache first
+        cache_key = cls._get_cache_key(bbox)
+        if cache_key in cls._color_cache:
+            # Update access order for LRU
+            if cache_key in cls._cache_access_order:
+                cls._cache_access_order.remove(cache_key)
+            cls._cache_access_order.append(cache_key)
+            return cls._color_cache[cache_key]
+        
         x1, y1, x2, y2 = bbox
         # Extract ROI with padding
         padding = 5
@@ -101,38 +136,56 @@ class ColorClassifier:
         
         roi = frame[y1:y2, x1:x2]
         if roi.size == 0:
+            cls._update_cache(cache_key, None)
             return None
+        
+        # Subsample large ROIs for performance
+        max_sample_size = 100  # Maximum dimension for sampling
+        if roi.shape[0] > max_sample_size or roi.shape[1] > max_sample_size:
+            scale = max_sample_size / max(roi.shape[0], roi.shape[1])
+            new_width = int(roi.shape[1] * scale)
+            new_height = int(roi.shape[0] * scale)
+            roi = cv2.resize(roi, (new_width, new_height), interpolation=cv2.INTER_AREA)
         
         # Convert to HSV
         hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
         
-        # Calculate color histogram
-        hist = cv2.calcHist([hsv], [0, 1, 2], None, [50, 50, 50], [0, 180, 0, 256, 0, 256])
+        # Use pixel sampling instead of full histogram (faster)
+        # Sample pixels in a grid pattern
+        sample_step = max(2, min(roi.shape[0] // 20, roi.shape[1] // 20))
+        sampled_pixels = hsv[::sample_step, ::sample_step]
         
-        # Check each color range
+        # Check each color range using sampled pixels
         color_scores = {}
+        total_pixels = sampled_pixels.shape[0] * sampled_pixels.shape[1]
+        
         for color_name, ranges in cls.COLOR_RANGES.items():
             if len(ranges) == 2:
                 # Single range
-                lower, upper = ranges
-                mask = cv2.inRange(hsv, np.array(lower), np.array(upper))
+                lower, upper = np.array(ranges[0]), np.array(ranges[1])
+                mask = np.all((sampled_pixels >= lower) & (sampled_pixels <= upper), axis=2)
             else:
                 # Multiple ranges (e.g., red)
-                mask1 = cv2.inRange(hsv, np.array(ranges[0]), np.array(ranges[1]))
-                mask2 = cv2.inRange(hsv, np.array(ranges[2]), np.array(ranges[3]))
-                mask = cv2.bitwise_or(mask1, mask2)
+                lower1, upper1 = np.array(ranges[0]), np.array(ranges[1])
+                lower2, upper2 = np.array(ranges[2]), np.array(ranges[3])
+                mask1 = np.all((sampled_pixels >= lower1) & (sampled_pixels <= upper1), axis=2)
+                mask2 = np.all((sampled_pixels >= lower2) & (sampled_pixels <= upper2), axis=2)
+                mask = mask1 | mask2
             
             # Calculate percentage of pixels matching this color
-            match_percentage = np.sum(mask > 0) / mask.size
+            match_percentage = np.sum(mask) / total_pixels if total_pixels > 0 else 0
             color_scores[color_name] = match_percentage
         
         # Return color with highest match percentage
+        result = None
         if color_scores:
             best_color = max(color_scores, key=color_scores.get)
             if color_scores[best_color] > 0.1:  # At least 10% match
-                return best_color
+                result = best_color
         
-        return None
+        # Update cache
+        cls._update_cache(cache_key, result)
+        return result
     
     @classmethod
     def is_whitelist(cls, color: Optional[str]) -> bool:
@@ -215,6 +268,25 @@ class DetectionModule:
             except Exception as e2:
                 logger.error(f"Failed to load default model: {str(e2)}")
                 return False
+    
+    def warmup(self, dummy_frame_size: Tuple[int, int] = (640, 480)):
+        """
+        Warm up the model with a dummy inference to avoid slow first inference.
+        
+        Args:
+            dummy_frame_size: Size of dummy frame for warmup (width, height)
+        """
+        if self.model is None:
+            logger.warning("Cannot warmup: model not loaded")
+            return
+        
+        try:
+            logger.info("Warming up model with dummy inference...")
+            dummy_frame = np.zeros((dummy_frame_size[1], dummy_frame_size[0], 3), dtype=np.uint8)
+            _ = self.model(dummy_frame, verbose=False)
+            logger.info("Model warmup complete")
+        except Exception as e:
+            logger.warning(f"Model warmup failed: {str(e)}")
     
     def detect(self, frame: np.ndarray) -> List[Detection]:
         """
