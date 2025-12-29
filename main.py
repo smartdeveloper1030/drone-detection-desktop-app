@@ -4,6 +4,11 @@ Main application entry point for Drone Detection System - Milestone 1.
 import sys
 import logging
 import time
+
+# IMPORTANT: Import torch BEFORE PyQt5 to avoid DLL conflicts on Windows
+# This must be done before any PyQt5 imports
+import torch
+
 from PyQt5.QtWidgets import QApplication
 from PyQt5.QtCore import QTimer
 import cv2
