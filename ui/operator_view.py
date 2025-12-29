@@ -133,6 +133,20 @@ class OperatorView(QWidget):
         Returns:
             np.ndarray: Frame with drawings
         """
+        # Calculate adaptive scale based on frame resolution
+        # Base scale for 640x480, scale up for higher resolutions
+        frame_height, frame_width = frame.shape[:2]
+        base_resolution = 480  # Reference height
+        scale_factor = max(0.6, min(2.0, frame_height / base_resolution * 0.6))
+        
+        # Scale drawing parameters
+        font_scale = scale_factor
+        line_thickness = max(1, int(scale_factor * 2))
+        box_thickness_blacklist = max(2, int(scale_factor * 3))
+        box_thickness_whitelist = max(1, int(scale_factor * 2))
+        center_point_radius = max(3, int(scale_factor * 5))
+        label_padding = max(3, int(scale_factor * 5))
+        
         # Draw bounding boxes
         for det in detections:
             x1 = det.x - det.width // 2
@@ -143,7 +157,7 @@ class OperatorView(QWidget):
             # Determine color based on classification
             is_blacklist = self._is_blacklist(det)
             color = (0, 0, 255) if is_blacklist else (0, 255, 0)  # Red for blacklist, green for whitelist
-            thickness = 3 if is_blacklist else 2
+            thickness = box_thickness_blacklist if is_blacklist else box_thickness_whitelist
             
             # Draw bounding box
             cv2.rectangle(frame, (x1, y1), (x2, y2), color, thickness)
@@ -153,65 +167,70 @@ class OperatorView(QWidget):
             if det.color_class:
                 label += f" [{det.color_class}]"
             
-            # Label background
+            # Label background with adaptive sizing
             (text_width, text_height), baseline = cv2.getTextSize(
-                label, cv2.FONT_HERSHEY_SIMPLEX, 0.6, 2
+                label, cv2.FONT_HERSHEY_SIMPLEX, font_scale, line_thickness
             )
             cv2.rectangle(
                 frame,
-                (x1, y1 - text_height - baseline - 5),
+                (x1, y1 - text_height - baseline - label_padding),
                 (x1 + text_width, y1),
                 color,
                 -1
             )
             
-            # Label text
+            # Label text with adaptive font size
             cv2.putText(
                 frame,
                 label,
-                (x1, y1 - 5),
+                (x1, y1 - label_padding),
                 cv2.FONT_HERSHEY_SIMPLEX,
-                0.6,
+                font_scale,
                 (255, 255, 255),
-                2
+                line_thickness
             )
             
-            # Draw center point
-            cv2.circle(frame, (det.x, det.y), 5, color, -1)
+            # Draw center point with adaptive size
+            cv2.circle(frame, (det.x, det.y), center_point_radius, color, -1)
         
-        # Draw predicted point
+        # Draw predicted point with adaptive sizing
         if predicted_point:
             x, y = predicted_point
-            cv2.circle(frame, (int(x), int(y)), 8, (255, 255, 0), 2)  # Yellow circle
+            pred_radius = max(4, int(scale_factor * 8))
+            pred_thickness = max(1, int(scale_factor * 2))
+            pred_font_scale = font_scale * 0.8
+            cv2.circle(frame, (int(x), int(y)), pred_radius, (255, 255, 0), pred_thickness)
             cv2.putText(
                 frame,
                 "PRED",
-                (int(x) + 10, int(y)),
+                (int(x) + max(5, int(scale_factor * 10)), int(y)),
                 cv2.FONT_HERSHEY_SIMPLEX,
-                0.5,
+                pred_font_scale,
                 (255, 255, 0),
-                2
+                line_thickness
             )
         
-        # Draw servo crosshair
+        # Draw servo crosshair with adaptive sizing
         if servo_crosshair:
             x, y = servo_crosshair
             x, y = int(x), int(y)
-            crosshair_size = 20
+            crosshair_size = max(10, int(scale_factor * 20))
+            crosshair_thickness = max(1, int(scale_factor * 2))
+            servo_font_scale = font_scale * 0.8
             # Horizontal line
-            cv2.line(frame, (x - crosshair_size, y), (x + crosshair_size, y), (0, 255, 255), 2)
+            cv2.line(frame, (x - crosshair_size, y), (x + crosshair_size, y), (0, 255, 255), crosshair_thickness)
             # Vertical line
-            cv2.line(frame, (x, y - crosshair_size), (x, y + crosshair_size), (0, 255, 255), 2)
+            cv2.line(frame, (x, y - crosshair_size), (x, y + crosshair_size), (0, 255, 255), crosshair_thickness)
             # Center circle
-            cv2.circle(frame, (x, y), 5, (0, 255, 255), 2)
+            cv2.circle(frame, (x, y), max(3, int(scale_factor * 5)), (0, 255, 255), crosshair_thickness)
             cv2.putText(
                 frame,
                 "SERVO",
-                (x + 15, y - 15),
+                (x + max(8, int(scale_factor * 15)), y - max(8, int(scale_factor * 15))),
                 cv2.FONT_HERSHEY_SIMPLEX,
-                0.5,
+                servo_font_scale,
                 (0, 255, 255),
-                2
+                line_thickness
             )
         
         return frame
