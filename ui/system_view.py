@@ -3,7 +3,7 @@ System View - System status, alerts, and configuration display.
 """
 from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, 
                              QTextEdit, QGroupBox, QGridLayout, QPushButton,
-                             QDoubleSpinBox)
+                             QDoubleSpinBox, QSpinBox)
 from PyQt5.QtCore import Qt, QTimer, pyqtSignal
 from PyQt5.QtGui import QColor, QPalette, QFont
 from datetime import datetime
@@ -16,6 +16,9 @@ class SystemView(QWidget):
     
     # Signal emitted when confidence threshold changes
     confidence_threshold_changed = pyqtSignal(float)  # Emits new threshold value
+    
+    # Signal emitted when prediction horizon changes
+    prediction_horizon_changed = pyqtSignal(int)  # Emits new horizon in milliseconds
     
     def __init__(self, parent=None):
         """Initialize the system view."""
@@ -143,6 +146,34 @@ class SystemView(QWidget):
         """)
         self.conf_threshold_spinbox.valueChanged.connect(self._on_confidence_threshold_changed)
         config_layout.addWidget(self.conf_threshold_spinbox, 3, 1)
+        
+        pred_horizon_label = QLabel("Prediction Horizon:")
+        pred_horizon_label.setStyleSheet("color: white;")
+        config_layout.addWidget(pred_horizon_label, 4, 0)
+        self.pred_horizon_spinbox = QSpinBox()
+        self.pred_horizon_spinbox.setMinimum(0)
+        self.pred_horizon_spinbox.setMaximum(5000)
+        self.pred_horizon_spinbox.setSingleStep(50)
+        self.pred_horizon_spinbox.setSuffix(" ms")
+        self.pred_horizon_spinbox.setValue(Config.PREDICTION_HORIZON_MS)
+        self.pred_horizon_spinbox.setStyleSheet("""
+            QSpinBox {
+                background-color: #3b3b3b;
+                color: white;
+                border: 1px solid #555;
+                border-radius: 4px;
+                padding: 5px;
+                min-width: 100px;
+            }
+            QSpinBox:hover {
+                background-color: #444;
+            }
+            QSpinBox:focus {
+                border: 1px solid #777;
+            }
+        """)
+        self.pred_horizon_spinbox.valueChanged.connect(self._on_prediction_horizon_changed)
+        config_layout.addWidget(self.pred_horizon_spinbox, 4, 1)
         
         config_group.setLayout(config_layout)
         main_layout.addWidget(config_group)
@@ -296,4 +327,14 @@ class SystemView(QWidget):
         self.conf_threshold_spinbox.blockSignals(True)
         self.conf_threshold_spinbox.setValue(value)
         self.conf_threshold_spinbox.blockSignals(False)
+    
+    def _on_prediction_horizon_changed(self, value: int):
+        """Handle prediction horizon change."""
+        self.prediction_horizon_changed.emit(value)
+    
+    def set_prediction_horizon(self, value: int):
+        """Set prediction horizon value programmatically."""
+        self.pred_horizon_spinbox.blockSignals(True)
+        self.pred_horizon_spinbox.setValue(value)
+        self.pred_horizon_spinbox.blockSignals(False)
 

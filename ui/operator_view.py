@@ -62,7 +62,8 @@ class OperatorView(QWidget):
     
     def update_frame(self, frame: np.ndarray, detections: List[Detection], 
                     predicted_point: Optional[tuple] = None,
-                    servo_crosshair: Optional[tuple] = None):
+                    servo_crosshair: Optional[tuple] = None,
+                    prediction_horizon_ms: int = 500):
         """
         Update the video frame with detections.
         
@@ -71,6 +72,7 @@ class OperatorView(QWidget):
             detections: List of detections
             predicted_point: Predicted position (x, y)
             servo_crosshair: Servo crosshair position (x, y)
+            prediction_horizon_ms: Prediction horizon in milliseconds
         """
         self.current_frame = frame.copy()
         self.detections = detections
@@ -78,7 +80,7 @@ class OperatorView(QWidget):
         self.servo_crosshair = servo_crosshair
         
         # Draw on frame
-        display_frame = self.draw_detections(frame.copy(), detections, predicted_point, servo_crosshair)
+        display_frame = self.draw_detections(frame.copy(), detections, predicted_point, servo_crosshair, prediction_horizon_ms)
         
         # Convert to QImage and display
         height, width, channel = display_frame.shape
@@ -120,7 +122,8 @@ class OperatorView(QWidget):
     
     def draw_detections(self, frame: np.ndarray, detections: List[Detection],
                        predicted_point: Optional[tuple] = None,
-                       servo_crosshair: Optional[tuple] = None) -> np.ndarray:
+                       servo_crosshair: Optional[tuple] = None,
+                       prediction_horizon_ms: int = 500) -> np.ndarray:
         """
         Draw detections, predicted point, and servo crosshair on frame.
         
@@ -129,6 +132,7 @@ class OperatorView(QWidget):
             detections: List of detections
             predicted_point: Predicted position
             servo_crosshair: Servo crosshair position
+            prediction_horizon_ms: Prediction horizon in milliseconds
         
         Returns:
             np.ndarray: Frame with drawings
@@ -162,10 +166,23 @@ class OperatorView(QWidget):
             # Draw bounding box
             cv2.rectangle(frame, (x1, y1), (x2, y2), color, thickness)
             
-            # Draw label
-            label = f"{det.class_name} {det.confidence:.2f}"
+            # Build label with ID, class, confidence, and speed
+            label_parts = []
+            if det.track_id is not None:
+                label_parts.append(f"ID:{det.track_id}")
+            label_parts.append(det.class_name)
+            label_parts.append(f"{det.confidence:.2f}")
+            
+            # Add speed if available
+            if det.velocity is not None:
+                vx, vy = det.velocity
+                speed = np.sqrt(vx**2 + vy**2)
+                label_parts.append(f"Speed:{speed:.1f}px/s")
+            
             if det.color_class:
-                label += f" [{det.color_class}]"
+                label_parts.append(f"[{det.color_class}]")
+            
+            label = " ".join(label_parts)
             
             # Label background with adaptive sizing
             (text_width, text_height), baseline = cv2.getTextSize(
@@ -193,20 +210,59 @@ class OperatorView(QWidget):
             # Draw center point with adaptive size
             cv2.circle(frame, (det.x, det.y), center_point_radius, color, -1)
         
-        # Draw predicted point with adaptive sizing
+        # Draw predicted point with adaptive sizing (red circle like in image)
         if predicted_point:
-            x, y = predicted_point
-            pred_radius = max(4, int(scale_factor * 8))
-            pred_thickness = max(1, int(scale_factor * 2))
-            pred_font_scale = font_scale * 0.8
-            cv2.circle(frame, (int(x), int(y)), pred_radius, (255, 255, 0), pred_thickness)
+            pred_x, pred_y = predicted_point
+            pred_radius = max(15, int(scale_factor * 15))
+            pred_thickness = max(2, int(scale_factor * 3))
+            pred_font_scale = font_scale * 0.7
+            pred_color = (0, 0, 255)  # Red (BGR)
+            trajectory_color = (0, 165, 255)  # Orange (BGR)
+            
+            # Find the detection that corresponds to this prediction (primary track)
+            # The primary prediction prioritizes blacklist/threat objects, then most confident
+            primary_detection = None
+            if detections:
+                # First, try to find blacklist/threat detections
+                blacklist_detections = [det for det in detections 
+                                       if det.track_id is not None and det.velocity is not None 
+                                       and self._is_blacklist(det)]
+                if blacklist_detections:
+                    # Use the most confident blacklist detection
+                    primary_detection = max(blacklist_detections, key=lambda d: d.confidence)
+                else:
+                    # Otherwise, use the most confident tracked detection
+                    tracked_detections = [det for det in detections 
+                                        if det.track_id is not None and det.velocity is not None]
+                    if tracked_detections:
+                        primary_detection = max(tracked_detections, key=lambda d: d.confidence)
+            
+            # Draw trajectory line from detection center to predicted point
+            if primary_detection:
+                trajectory_thickness = max(1, int(scale_factor * 2))
+                cv2.line(frame, (primary_detection.x, primary_detection.y), 
+                        (int(pred_x), int(pred_y)), trajectory_color, trajectory_thickness)
+            
+            # Draw outer circle
+            cv2.circle(frame, (int(pred_x), int(pred_y)), pred_radius, pred_color, pred_thickness)
+            # Draw inner dot
+            cv2.circle(frame, (int(pred_x), int(pred_y)), max(2, int(scale_factor * 3)), pred_color, -1)
+            
+            # Draw prediction label
+            pred_label = f"Pred {prediction_horizon_ms}ms"
+            (text_width, text_height), baseline = cv2.getTextSize(
+                pred_label, cv2.FONT_HERSHEY_SIMPLEX, pred_font_scale, line_thickness
+            )
+            # Position label to the right of the circle
+            label_x = int(pred_x) + pred_radius + max(5, int(scale_factor * 8))
+            label_y = int(pred_y)
             cv2.putText(
                 frame,
-                "PRED",
-                (int(x) + max(5, int(scale_factor * 10)), int(y)),
+                pred_label,
+                (label_x, label_y),
                 cv2.FONT_HERSHEY_SIMPLEX,
                 pred_font_scale,
-                (255, 255, 0),
+                pred_color,
                 line_thickness
             )
         

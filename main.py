@@ -18,7 +18,8 @@ import numpy as np
 
 from config import Config
 from camera_module import CameraModule
-from detection import DetectionModule
+from detection import DetectionModule, Detection
+from tracking import Tracker
 from ui.main_window import MainWindow
 
 # Configure logging
@@ -156,12 +157,16 @@ class DroneDetectionApp:
         self.main_window = MainWindow()
         self.camera = CameraModule()
         self.detector = DetectionModule()
+        self.tracker = Tracker(max_age=5, min_hits=1, iou_threshold=0.3)
         
         # Connect mode change signal
         self.main_window.mode_changed.connect(self._on_mode_changed)
         
         # Connect confidence threshold change signal
         self.main_window.get_system_view().confidence_threshold_changed.connect(self._on_confidence_threshold_changed)
+        
+        # Connect prediction horizon change signal
+        self.main_window.get_system_view().prediction_horizon_changed.connect(self._on_prediction_horizon_changed)
         
         # Processing state
         self.is_running = False
@@ -183,6 +188,9 @@ class DroneDetectionApp:
         # Latest detections (from detection thread)
         self.latest_detections = []
         self.last_detection_frame_id = -1
+        
+        # Prediction horizon (in milliseconds)
+        self.prediction_horizon_ms = Config.PREDICTION_HORIZON_MS
         
     def initialize(self) -> bool:
         """
@@ -232,6 +240,9 @@ class DroneDetectionApp:
         # Set initial mode in UI
         self.main_window.set_mode(Config.DETECT_MODE)
         
+        # Initialize prediction horizon display
+        self.main_window.get_system_view().update_prediction_horizon(self.prediction_horizon_ms)
+        
         logger.info("Initialization complete")
         return True
     
@@ -271,6 +282,9 @@ class DroneDetectionApp:
         logger.info("Warming up new model...")
         self.detector.warmup()
         
+        # Clear tracker when mode changes (objects may be different)
+        self.tracker.clear()
+        
         # Restart detection thread
         self.detection_thread = DetectionThread(
             self.detector,
@@ -300,6 +314,21 @@ class DroneDetectionApp:
             f"Confidence threshold updated to {threshold:.2f}", "INFO"
         )
     
+    def _on_prediction_horizon_changed(self, horizon_ms: int):
+        """
+        Handle prediction horizon change from UI.
+        
+        Args:
+            horizon_ms: New prediction horizon in milliseconds
+        """
+        logger.info(f"Prediction horizon changed to: {horizon_ms} ms")
+        self.prediction_horizon_ms = horizon_ms
+        # Update config for persistence
+        Config.PREDICTION_HORIZON_MS = horizon_ms
+        self.main_window.get_system_view().add_alert(
+            f"Prediction horizon updated to {horizon_ms} ms", "INFO"
+        )
+    
     def process_frame(self):
         """Process a single frame - display immediately, detection runs asynchronously."""
         if not self.is_running:
@@ -324,18 +353,58 @@ class DroneDetectionApp:
         # Get latest detection results (non-blocking, may be from older frame)
         detections = self.latest_detections  # Use cached detections immediately
         
-        # For now, predicted point and servo crosshair are None
-        # These will be implemented in Milestone 2 (Tracking & Prediction)
-        predicted_point = None
+        # Update tracker with current detections and get predictions
+        current_time = time.time()
+        tracks = self.tracker.update(detections, current_time)
+        predicted_point = self.tracker.get_primary_prediction(self.prediction_horizon_ms)
+        
+        # Enrich detections with track information
+        # Create a mapping from detection to track by comparing detection objects
+        enriched_detections = []
+        for det in detections:
+            # Find matching track for this detection
+            matching_track = None
+            for track in tracks:
+                # Match by position and class (within small tolerance for position)
+                if (abs(track.detection.x - det.x) < 5 and 
+                    abs(track.detection.y - det.y) < 5 and
+                    track.detection.class_name == det.class_name):
+                    matching_track = track
+                    break
+            
+            if matching_track:
+                # Create enriched detection with track info
+                enriched_det = Detection(
+                    x=det.x,
+                    y=det.y,
+                    width=det.width,
+                    height=det.height,
+                    confidence=det.confidence,
+                    class_id=det.class_id,
+                    class_name=det.class_name,
+                    color_class=det.color_class,
+                    distance=det.distance,
+                    track_id=matching_track.track_id,
+                    velocity=matching_track.velocity
+                )
+                enriched_detections.append(enriched_det)
+            else:
+                enriched_detections.append(det)
+        
+        # Update prediction horizon display
+        self.main_window.get_system_view().update_prediction_horizon(self.prediction_horizon_ms)
+        
+        # Servo crosshair (placeholder for future implementation)
         servo_crosshair = None
         
         # Update operator view IMMEDIATELY with current frame and latest detections
         # This ensures smooth display regardless of detection speed
         self.main_window.get_operator_view().update_frame(
             frame,
-            detections,
+            enriched_detections,
             predicted_point,
-            servo_crosshair
+            servo_crosshair,
+            self.prediction_horizon_ms
         )
         
         # Now handle detection asynchronously (non-blocking)

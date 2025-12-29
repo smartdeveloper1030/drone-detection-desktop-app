@@ -50,6 +50,8 @@ class Detection:
     class_name: str  # Class name
     color_class: Optional[str] = None  # Color classification for balloons
     distance: Optional[float] = None  # Distance (placeholder for future laser integration)
+    track_id: Optional[int] = None  # Track ID for tracking
+    velocity: Optional[Tuple[float, float]] = None  # Velocity (vx, vy) in pixels per second
     
     def to_dict(self) -> Dict:
         """Convert detection to dictionary."""

@@ -56,6 +56,9 @@ class Config:
     DETECTION_QUEUE_SIZE: int = int(os.getenv("DETECTION_QUEUE_SIZE", "2"))  # Max frames in detection queue
     COLOR_CACHE_SIZE: int = int(os.getenv("COLOR_CACHE_SIZE", "50"))  # Color classification cache size
     
+    # Tracking & Prediction Configuration
+    PREDICTION_HORIZON_MS: int = int(os.getenv("PREDICTION_HORIZON_MS", "500"))  # Prediction horizon in milliseconds
+    
     @classmethod
     def get_camera_source(cls) -> Optional[str]:
         """Get the camera source based on configuration."""
