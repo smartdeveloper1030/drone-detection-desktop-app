@@ -165,6 +165,7 @@ class DetectionModule:
         self.confidence_threshold = Config.YOLO_CONFIDENCE_THRESHOLD
         self.iou_threshold = Config.YOLO_IOU_THRESHOLD
         self.color_classifier = ColorClassifier()
+        self.device = "auto"  # Will be set during model loading
         
     def load_model(self) -> bool:
         """
@@ -202,8 +203,94 @@ class DetectionModule:
                     logger.info("Using default YOLOv8n model (will download if needed)")
                     model_path = 'yolov8n.pt'
             
+            # Determine device for YOLO model
+            device = Config.YOLO_DEVICE
+            if device == "auto":
+                # Auto-detect: use CUDA if available, otherwise CPU
+                device = "cuda" if torch.cuda.is_available() else "cpu"
+                logger.info(f"Auto-detected device: {device} (CUDA available: {torch.cuda.is_available()})")
+            else:
+                logger.info(f"Using configured device: {device}")
+            
+            # Load model
             self.model = YOLO(model_path)
-            logger.info("YOLO model loaded successfully")
+            
+            # If using GPU, move model to GPU explicitly
+            if device.startswith("cuda") and torch.cuda.is_available():
+                try:
+                    # Convert device string to integer for CUDA device index
+                    if device == "cuda":
+                        cuda_device = 0  # Use first GPU
+                        device_str = "cuda:0"
+                    elif ":" in device:
+                        cuda_device = int(device.split(":")[1])
+                        device_str = f"cuda:{cuda_device}"
+                    else:
+                        cuda_device = 0
+                        device_str = "cuda:0"
+                    
+                    # Move model to GPU - YOLO model has a trainer/model attribute
+                    moved = False
+                    if hasattr(self.model, 'model') and self.model.model is not None:
+                        # Move the underlying PyTorch model to GPU
+                        self.model.model.to(device_str)
+                        moved = True
+                        # Also move the predictor if it exists
+                        if hasattr(self.model, 'predictor') and self.model.predictor is not None:
+                            if hasattr(self.model.predictor, 'model'):
+                                self.model.predictor.model.to(device_str)
+                    
+                    if hasattr(self.model, 'trainer') and self.model.trainer is not None:
+                        # Alternative path for some YOLO versions
+                        if hasattr(self.model.trainer, 'model'):
+                            self.model.trainer.model.to(device_str)
+                            moved = True
+                    
+                    if moved:
+                        # Force CUDA initialization and clear cache
+                        torch.cuda.empty_cache()
+                        torch.cuda.synchronize()
+                        logger.info(f"Model moved to GPU device: {device_str}")
+                    
+                    # Do a warmup inference to ensure model is fully on GPU
+                    try:
+                        dummy_frame = np.zeros((640, 640, 3), dtype=np.uint8)
+                        _ = self.model(dummy_frame, device=cuda_device, verbose=False)
+                        logger.info("GPU warmup inference completed - model is ready for GPU inference")
+                    except Exception as warmup_error:
+                        logger.warning(f"GPU warmup failed (non-critical): {warmup_error}")
+                    
+                except Exception as e:
+                    logger.warning(f"Could not move model to GPU during load: {e}")
+                    logger.info("GPU will still be used via device parameter in inference calls")
+                    device = "cpu" if not torch.cuda.is_available() else device
+            
+            # Log device info - check where model parameters actually are
+            try:
+                if hasattr(self.model, 'model') and hasattr(self.model.model, 'parameters'):
+                    sample_param = next(self.model.model.parameters())
+                    actual_device = str(sample_param.device)
+                elif hasattr(self.model, 'device'):
+                    actual_device = str(self.model.device)
+                else:
+                    actual_device = device
+            except Exception:
+                actual_device = device
+            
+            logger.info(f"YOLO model loaded successfully on device: {actual_device}")
+            
+            # Log GPU info if using CUDA
+            if (device.startswith("cuda") or actual_device.startswith("cuda")) and torch.cuda.is_available():
+                try:
+                    gpu_name = torch.cuda.get_device_name(0) if torch.cuda.device_count() > 0 else "Unknown"
+                    cuda_version = torch.version.cuda if hasattr(torch.version, 'cuda') else "Unknown"
+                    logger.info(f"GPU: {gpu_name}, CUDA version: {cuda_version}")
+                except Exception:
+                    pass
+            
+            # Store device for inference
+            self.device = device
+            
             return True
         except Exception as e:
             logger.error(f"Error loading YOLO model: {str(e)}")
@@ -230,11 +317,31 @@ class DetectionModule:
             return []
         
         try:
-            # Run YOLO inference
+            # Run YOLO inference with device specified
+            device_to_use = getattr(self, 'device', 'auto')
+            
+            # Convert device string to proper format for YOLO
+            # YOLO accepts: int (0, 1, etc.), "cuda", "cuda:0", or None (auto)
+            if device_to_use == 'auto':
+                device_param = None  # Let YOLO auto-detect
+            elif device_to_use == 'cuda':
+                device_param = 0  # Use first GPU
+            elif device_to_use.startswith('cuda:'):
+                # Extract GPU index from "cuda:0" format
+                try:
+                    device_param = int(device_to_use.split(':')[1])
+                except (ValueError, IndexError):
+                    device_param = 0
+            elif device_to_use == 'cpu':
+                device_param = 'cpu'
+            else:
+                device_param = device_to_use
+            
             results = self.model(
                 frame,
                 conf=self.confidence_threshold,
                 iou=self.iou_threshold,
+                device=device_param,
                 verbose=False
             )
             

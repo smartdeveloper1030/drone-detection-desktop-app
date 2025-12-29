@@ -30,6 +30,7 @@ class Config:
     YOLO_MODEL_PATH: str = os.getenv("YOLO_MODEL_PATH", "models/yolov8n.pt")
     YOLO_CONFIDENCE_THRESHOLD: float = float(os.getenv("YOLO_CONFIDENCE_THRESHOLD", "0.25"))
     YOLO_IOU_THRESHOLD: float = float(os.getenv("YOLO_IOU_THRESHOLD", "0.45"))
+    YOLO_DEVICE: str = os.getenv("YOLO_DEVICE", "auto").lower()  # "auto", "cpu", "cuda", "cuda:0", etc.
     
     # Balloon Color Classification
     BALLOON_WHITELIST_COLORS: List[str] = [
