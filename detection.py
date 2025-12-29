@@ -6,12 +6,36 @@ import cv2
 import numpy as np
 import os
 from typing import List, Dict, Optional, Tuple
+import torch
 from ultralytics import YOLO
 from config import Config
 import logging
 from dataclasses import dataclass
 
 logger = logging.getLogger(__name__)
+
+# PyTorch 2.6 compatibility: Patch torch.load to handle weights_only parameter
+# This is needed because PyTorch 2.6 changed the default value from False to True
+# and Ultralytics YOLO models require weights_only=False
+try:
+    # Try to add safe globals first (PyTorch 2.6+ preferred method)
+    if hasattr(torch, 'serialization') and hasattr(torch.serialization, 'add_safe_globals'):
+        try:
+            from ultralytics.nn.tasks import DetectionModel
+            torch.serialization.add_safe_globals([DetectionModel])
+        except (ImportError, AttributeError):
+            pass
+    
+    # Patch torch.load as fallback/complementary solution
+    original_load = torch.load
+    def patched_load(*args, **kwargs):
+        # Set weights_only=False if not explicitly provided (for PyTorch 2.6+)
+        if 'weights_only' not in kwargs:
+            kwargs['weights_only'] = False
+        return original_load(*args, **kwargs)
+    torch.load = patched_load
+except Exception as e:
+    logger.warning(f"Could not patch torch.load for PyTorch 2.6 compatibility: {e}")
 
 
 @dataclass
@@ -144,22 +168,39 @@ class DetectionModule:
         
     def load_model(self) -> bool:
         """
-        Load the YOLOv8 model.
+        Load the YOLOv8 model based on detect mode.
+        - If detect mode is "balloon", uses models/best_balloon_nano.pt
+        - If detect mode is "drone", uses models/best_drone_nano.pt
         Model will be downloaded automatically if not found.
         
         Returns:
             bool: True if model loaded successfully
         """
         try:
-            model_path = Config.YOLO_MODEL_PATH
-            logger.info(f"Loading YOLO model from {model_path}")
+            # Determine model path based on detect mode
+            detect_mode = Config.DETECT_MODE.lower()
+            if detect_mode == "balloon":
+                model_path = "models/best_balloon_nano.pt"
+            elif detect_mode == "drone":
+                model_path = "models/best_drone_nano.pt"
+            else:
+                # Fallback to configured path if mode is not recognized
+                model_path = Config.YOLO_MODEL_PATH
+                logger.warning(f"Unknown detect mode: {detect_mode}, using configured model path: {model_path}")
             
-            # YOLO will automatically download the model if it doesn't exist
+            logger.info(f"Loading YOLO model from {model_path} (detect mode: {detect_mode})")
+            
             # For custom models, ensure the file exists
-            if not model_path.startswith('yolov8') and not os.path.exists(model_path):
+            if not os.path.exists(model_path):
                 logger.warning(f"Model file not found: {model_path}")
-                logger.info("Using default YOLOv8n model (will download if needed)")
-                model_path = 'yolov8n.pt'
+                # Try fallback to configured path
+                if model_path != Config.YOLO_MODEL_PATH and os.path.exists(Config.YOLO_MODEL_PATH):
+                    logger.info(f"Using fallback model path: {Config.YOLO_MODEL_PATH}")
+                    model_path = Config.YOLO_MODEL_PATH
+                elif not model_path.startswith('yolov8'):
+                    logger.error(f"Custom model file not found: {model_path}")
+                    logger.info("Using default YOLOv8n model (will download if needed)")
+                    model_path = 'yolov8n.pt'
             
             self.model = YOLO(model_path)
             logger.info("YOLO model loaded successfully")
