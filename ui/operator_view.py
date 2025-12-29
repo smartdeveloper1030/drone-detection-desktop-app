@@ -168,16 +168,16 @@ class OperatorView(QWidget):
             
             # Build label with ID, class, confidence, and speed
             label_parts = []
-            if det.track_id is not None:
-                label_parts.append(f"ID:{det.track_id}")
+            # if det.track_id is not None:
+                # label_parts.append(f"ID:{det.track_id}")
             label_parts.append(det.class_name)
             label_parts.append(f"{det.confidence:.2f}")
             
             # Add speed if available
-            if det.velocity is not None:
-                vx, vy = det.velocity
-                speed = np.sqrt(vx**2 + vy**2)
-                label_parts.append(f"Speed:{speed:.1f}px/s")
+            # if det.velocity is not None:
+            #     vx, vy = det.velocity
+            #     speed = np.sqrt(vx**2 + vy**2)
+            #     label_parts.append(f"Speed:{speed:.1f}px/s")
             
             if det.color_class:
                 label_parts.append(f"[{det.color_class}]")
