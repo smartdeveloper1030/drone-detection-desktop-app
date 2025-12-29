@@ -224,6 +224,7 @@ class DetectionModule:
         Load the YOLOv8 model based on detect mode.
         - If detect mode is "balloon", uses models/best_balloon_nano.pt
         - If detect mode is "drone", uses models/best_drone_nano.pt
+        - If detect mode is "person", uses models/yolov8n.pt (default COCO model for human detection)
         Model will be downloaded automatically if not found.
         
         Returns:
@@ -236,6 +237,8 @@ class DetectionModule:
                 model_path = "models/best_balloon_nano.pt"
             elif detect_mode == "drone":
                 model_path = "models/best_drone_nano.pt"
+            elif detect_mode == "person":
+                model_path = "models/yolov8n.pt"  # Default COCO model for human detection
             else:
                 # Fallback to configured path if mode is not recognized
                 model_path = Config.YOLO_MODEL_PATH
@@ -250,20 +253,29 @@ class DetectionModule:
                 if model_path != Config.YOLO_MODEL_PATH and os.path.exists(Config.YOLO_MODEL_PATH):
                     logger.info(f"Using fallback model path: {Config.YOLO_MODEL_PATH}")
                     model_path = Config.YOLO_MODEL_PATH
-                elif not model_path.startswith('yolov8'):
+                elif detect_mode == "person" and not os.path.exists(model_path):
+                    # For person mode, try models/yolov8n.pt first, then download if needed
+                    logger.info(f"Model not found at {model_path}, will download if needed")
+                    # YOLO will automatically download if file doesn't exist
+                elif not model_path.startswith('yolov8') and not model_path.startswith('models/yolov8'):
                     logger.error(f"Custom model file not found: {model_path}")
                     logger.info("Using default YOLOv8n model (will download if needed)")
-                    model_path = 'yolov8n.pt'
+                    model_path = 'models/yolov8n.pt'
             
             self.model = YOLO(model_path)
             logger.info("YOLO model loaded successfully")
             return True
         except Exception as e:
             logger.error(f"Error loading YOLO model: {str(e)}")
-            logger.info("Trying to use default YOLOv8n model...")
+            logger.info("Trying to use default YOLOv8n model from models folder...")
             try:
-                self.model = YOLO('yolov8n.pt')
-                logger.info("Default YOLOv8n model loaded successfully")
+                # Try models folder first, then root (will download if needed)
+                try:
+                    self.model = YOLO('models/yolov8n.pt')
+                    logger.info("Default YOLOv8n model loaded successfully from models folder")
+                except:
+                    self.model = YOLO('yolov8n.pt')
+                    logger.info("Default YOLOv8n model loaded successfully (will be downloaded if needed)")
                 return True
             except Exception as e2:
                 logger.error(f"Failed to load default model: {str(e2)}")
@@ -375,7 +387,7 @@ class DetectionModule:
     
     def _should_detect(self, class_name: str, class_id: int) -> bool:
         """
-        Check if we should detect this class based on configuration.
+        Check if we should detect this class based on configuration and current mode.
         
         Args:
             class_name: Name of the class
@@ -385,7 +397,21 @@ class DetectionModule:
             bool: True if should detect, False otherwise
         """
         class_name_lower = class_name.lower()
+        detect_mode = Config.DETECT_MODE.lower()
         
+        # If mode is "person", only detect persons
+        if detect_mode == "person":
+            return 'person' in class_name_lower or class_id == 0
+        
+        # If mode is "drone", only detect drones
+        if detect_mode == "drone":
+            return 'drone' in class_name_lower
+        
+        # If mode is "balloon", only detect balloons
+        if detect_mode == "balloon":
+            return 'balloon' in class_name_lower
+        
+        # Fallback to configuration-based detection
         # Check for person
         if 'person' in class_name_lower or class_id == 0:
             return Config.DETECT_PERSON

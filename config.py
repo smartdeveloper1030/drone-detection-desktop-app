@@ -27,7 +27,7 @@ class Config:
     TEST_VIDEO_PATH: str = os.getenv("TEST_VIDEO_PATH", "test_videos/sample.mp4")
     
     # Detection Configuration
-    DETECT_MODE: str = os.getenv("DETECT_MODE", "drone").lower()  # "balloon" or "drone"
+    DETECT_MODE: str = os.getenv("DETECT_MODE", "drone").lower()  # "balloon", "drone", or "person"
     YOLO_MODEL_PATH: str = os.getenv("YOLO_MODEL_PATH", "models/yolov8n.pt")
     YOLO_CONFIDENCE_THRESHOLD: float = float(os.getenv("YOLO_CONFIDENCE_THRESHOLD", "0.25"))
     YOLO_IOU_THRESHOLD: float = float(os.getenv("YOLO_IOU_THRESHOLD", "0.45"))

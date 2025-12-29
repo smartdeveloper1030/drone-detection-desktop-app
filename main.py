@@ -237,7 +237,7 @@ class DroneDetectionApp:
         Handle detection mode change from UI.
         
         Args:
-            mode: "balloon" or "drone"
+            mode: "balloon", "drone", or "person"
         """
         logger.info(f"Detection mode changed to: {mode}")
         

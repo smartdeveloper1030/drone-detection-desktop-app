@@ -13,7 +13,7 @@ class MainWindow(QMainWindow):
     """Main application window."""
     
     # Signal emitted when detection mode changes
-    mode_changed = pyqtSignal(str)  # Emits "balloon" or "drone"
+    mode_changed = pyqtSignal(str)  # Emits "balloon", "drone", or "person"
     
     def __init__(self):
         """Initialize the main window."""
@@ -34,9 +34,9 @@ class MainWindow(QMainWindow):
         mode_label.setStyleSheet("color: white; font-weight: bold; font-size: 12px;")
         toolbar_layout.addWidget(mode_label)
         
-        # Mode selector (balloon/drone)
+        # Mode selector (balloon/drone/person)
         self.mode_combo = QComboBox()
-        self.mode_combo.addItems(["Drone", "Balloon"])
+        self.mode_combo.addItems(["Drone", "Balloon", "Person"])
         self.mode_combo.setCurrentText(Config.DETECT_MODE.capitalize())
         self.mode_combo.setStyleSheet("""
             QComboBox {
@@ -137,7 +137,7 @@ class MainWindow(QMainWindow):
     def set_mode(self, mode: str):
         """Set detection mode programmatically."""
         mode_capitalized = mode.capitalize()
-        if mode_capitalized in ["Drone", "Balloon"]:
+        if mode_capitalized in ["Drone", "Balloon", "Person"]:
             self.mode_combo.setCurrentText(mode_capitalized)
     
     def get_operator_view(self) -> OperatorView:
