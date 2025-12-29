@@ -66,6 +66,16 @@ class CameraModule:
                 self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.height)
                 self.cap.set(cv2.CAP_PROP_FPS, self.fps)
             
+            # Set buffer size to minimize latency (drop old frames)
+            # Buffer size of 1 means we always get the latest frame, dropping old ones
+            # This is critical for reducing latency and preventing frame buildup
+            try:
+                self.cap.set(cv2.CAP_PROP_BUFFERSIZE, Config.CAMERA_BUFFER_SIZE)
+                actual_buffer = self.cap.get(cv2.CAP_PROP_BUFFERSIZE)
+                logger.info(f"Camera buffer size set to {Config.CAMERA_BUFFER_SIZE} (actual: {actual_buffer})")
+            except Exception as e:
+                logger.warning(f"Could not set camera buffer size: {str(e)}")
+            
             # Get actual properties
             actual_width = int(self.cap.get(cv2.CAP_PROP_FRAME_WIDTH))
             actual_height = int(self.cap.get(cv2.CAP_PROP_FRAME_HEIGHT))

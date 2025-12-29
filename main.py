@@ -193,12 +193,9 @@ class DroneDetectionApp:
             return False
         
         # Warmup model (first inference is slow)
+        # Uses configured YOLO_INPUT_SIZE for warmup (optimized for performance)
         logger.info("Warming up model...")
-        frame_size = self.camera.get_frame_size()
-        if frame_size[0] > 0 and frame_size[1] > 0:
-            self.detector.warmup(frame_size)
-        else:
-            self.detector.warmup()  # Use default size
+        self.detector.warmup()  # Uses YOLO_INPUT_SIZE from config (default 416)
         
         # Connect camera
         if not self.camera.connect():

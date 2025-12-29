@@ -269,21 +269,27 @@ class DetectionModule:
                 logger.error(f"Failed to load default model: {str(e2)}")
                 return False
     
-    def warmup(self, dummy_frame_size: Tuple[int, int] = (640, 480)):
+    def warmup(self, dummy_frame_size: Tuple[int, int] = None):
         """
         Warm up the model with a dummy inference to avoid slow first inference.
         
         Args:
-            dummy_frame_size: Size of dummy frame for warmup (width, height)
+            dummy_frame_size: Size of dummy frame for warmup (width, height). 
+                              If None, uses YOLO_INPUT_SIZE from config.
         """
         if self.model is None:
             logger.warning("Cannot warmup: model not loaded")
             return
         
         try:
-            logger.info("Warming up model with dummy inference...")
+            # Use configured input size for warmup
+            if dummy_frame_size is None:
+                warmup_size = Config.YOLO_INPUT_SIZE
+                dummy_frame_size = (warmup_size, warmup_size)
+            
+            logger.info(f"Warming up model with dummy inference (size: {dummy_frame_size[0]}x{dummy_frame_size[1]})...")
             dummy_frame = np.zeros((dummy_frame_size[1], dummy_frame_size[0], 3), dtype=np.uint8)
-            _ = self.model(dummy_frame, verbose=False)
+            _ = self.model(dummy_frame, imgsz=Config.YOLO_INPUT_SIZE, verbose=False)
             logger.info("Model warmup complete")
         except Exception as e:
             logger.warning(f"Model warmup failed: {str(e)}")
@@ -302,9 +308,11 @@ class DetectionModule:
             return []
         
         try:
-            # Run YOLO inference
+            # Run YOLO inference with optimized input size
+            # Using imgsz parameter to reduce input resolution for faster inference
             results = self.model(
                 frame,
+                imgsz=Config.YOLO_INPUT_SIZE,  # Reduced input size (416 vs default 640) for better FPS
                 conf=self.confidence_threshold,
                 iou=self.iou_threshold,
                 verbose=False
