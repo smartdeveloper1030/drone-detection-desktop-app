@@ -1,6 +1,6 @@
 """
 Object tracking and prediction module.
-Tracks objects across frames and predicts future positions.
+Tracks objects across frames and predicts future positions using Kalman Filter.
 """
 import numpy as np
 import time
@@ -12,18 +12,168 @@ import logging
 logger = logging.getLogger(__name__)
 
 
+class KalmanFilter2D:
+    """
+    2D Kalman Filter for object tracking with position, velocity, and acceleration handling.
+    State vector: [x, y, vx, vy]
+    """
+    
+    def __init__(self, initial_x: float = 0.0, initial_y: float = 0.0):
+        """
+        Initialize Kalman Filter.
+        
+        Args:
+            initial_x: Initial x position
+            initial_y: Initial y position
+        """
+        # State vector: [x, y, vx, vy]
+        self.state = np.array([initial_x, initial_y, 0.0, 0.0], dtype=np.float32)
+        
+        # State covariance matrix (uncertainty in state)
+        self.P = np.eye(4, dtype=np.float32) * 1000.0  # Large initial uncertainty
+        
+        # Process noise covariance (Q) - accounts for acceleration/process uncertainty
+        # Higher values = more uncertainty in motion model
+        dt = 1.0  # Time step (will be updated dynamically)
+        q = 0.1  # Process noise scale
+        
+        # Q matrix for constant velocity model with acceleration uncertainty
+        # Acceleration affects velocity and position
+        self.Q = np.array([
+            [dt**4/4, 0, dt**3/2, 0],
+            [0, dt**4/4, 0, dt**3/2],
+            [dt**3/2, 0, dt**2, 0],
+            [0, dt**3/2, 0, dt**2]
+        ], dtype=np.float32) * q
+        
+        # Measurement matrix (H) - we only observe position
+        self.H = np.array([
+            [1, 0, 0, 0],
+            [0, 1, 0, 0]
+        ], dtype=np.float32)
+        
+        # Measurement noise covariance (R) - uncertainty in detections
+        self.R = np.eye(2, dtype=np.float32) * 10.0  # Detection noise
+        
+        # Identity matrix
+        self.I = np.eye(4, dtype=np.float32)
+    
+    def predict(self, dt: float) -> Tuple[float, float]:
+        """
+        Predict next state.
+        
+        Args:
+            dt: Time step in seconds
+        
+        Returns:
+            Predicted (x, y) position
+        """
+        # State transition matrix (F) for constant velocity model
+        F = np.array([
+            [1, 0, dt, 0],
+            [0, 1, 0, dt],
+            [0, 0, 1, 0],
+            [0, 0, 0, 1]
+        ], dtype=np.float32)
+        
+        # Update process noise based on time step
+        q = 0.1
+        self.Q = np.array([
+            [dt**4/4, 0, dt**3/2, 0],
+            [0, dt**4/4, 0, dt**3/2],
+            [dt**3/2, 0, dt**2, 0],
+            [0, dt**3/2, 0, dt**2]
+        ], dtype=np.float32) * q
+        
+        # Predict state: x' = F * x
+        self.state = F @ self.state
+        
+        # Predict covariance: P' = F * P * F^T + Q
+        self.P = F @ self.P @ F.T + self.Q
+        
+        # Return predicted position
+        return (float(self.state[0]), float(self.state[1]))
+    
+    def update(self, measurement_x: float, measurement_y: float):
+        """
+        Update filter with measurement.
+        
+        Args:
+            measurement_x: Measured x position
+            measurement_y: Measured y position
+        """
+        # Measurement vector
+        z = np.array([measurement_x, measurement_y], dtype=np.float32)
+        
+        # Predicted measurement: z' = H * x
+        z_pred = self.H @ self.state
+        
+        # Innovation (measurement residual)
+        y = z - z_pred
+        
+        # Innovation covariance: S = H * P * H^T + R
+        S = self.H @ self.P @ self.H.T + self.R
+        
+        # Kalman gain: K = P * H^T * S^-1
+        K = self.P @ self.H.T @ np.linalg.inv(S)
+        
+        # Update state: x = x + K * y
+        self.state = self.state + K @ y
+        
+        # Update covariance: P = (I - K * H) * P
+        self.P = (self.I - K @ self.H) @ self.P
+    
+    def get_position(self) -> Tuple[float, float]:
+        """Get current estimated position."""
+        return (float(self.state[0]), float(self.state[1]))
+    
+    def get_velocity(self) -> Tuple[float, float]:
+        """Get current estimated velocity."""
+        return (float(self.state[2]), float(self.state[3]))
+    
+    def predict_future(self, time_ahead_s: float) -> Tuple[float, float]:
+        """
+        Predict position at a future time.
+        
+        Args:
+            time_ahead_s: Time ahead in seconds
+        
+        Returns:
+            Predicted (x, y) position
+        """
+        # Use current state to predict future
+        x, y, vx, vy = self.state
+        
+        # Predict with constant velocity model
+        # x_future = x + vx * dt
+        # y_future = y + vy * dt
+        predicted_x = x + vx * time_ahead_s
+        predicted_y = y + vy * time_ahead_s
+        
+        return (float(predicted_x), float(predicted_y))
+
+
 @dataclass
 class Track:
-    """Track data for a single object."""
+    """Track data for a single object with Kalman Filter."""
     track_id: int
     detection: Detection
     position_history: List[Tuple[float, float, float]] = field(default_factory=list)  # (x, y, timestamp)
-    velocity: Tuple[float, float] = (0.0, 0.0)  # (vx, vy) in pixels per second
     age: int = 0  # Number of frames since last update
     hits: int = 1  # Number of successful matches
+    kalman_filter: Optional[KalmanFilter2D] = field(default=None, init=False)
+    last_timestamp: float = field(default=0.0, init=False)
+    
+    def __post_init__(self):
+        """Initialize Kalman Filter after object creation."""
+        if self.kalman_filter is None:
+            self.kalman_filter = KalmanFilter2D(self.detection.x, self.detection.y)
+            self.last_timestamp = time.time()
+            # Initialize position history
+            self.position_history.append((self.detection.x, self.detection.y, self.last_timestamp))
     
     def update(self, detection: Detection, timestamp: float):
-        """Update track with new detection."""
+        """Update track with new detection using Kalman Filter."""
         self.detection = detection
         self.position_history.append((detection.x, detection.y, timestamp))
         self.hits += 1
@@ -33,35 +183,30 @@ class Track:
         if len(self.position_history) > 10:
             self.position_history.pop(0)
         
-        # Calculate velocity from recent positions
-        self._calculate_velocity()
-    
-    def _calculate_velocity(self):
-        """Calculate velocity from position history."""
-        if len(self.position_history) < 2:
-            self.velocity = (0.0, 0.0)
-            return
+        # Calculate time step
+        dt = timestamp - self.last_timestamp if self.last_timestamp > 0 else 0.0
+        if dt <= 0:
+            dt = 0.033  # Default to ~30 FPS if invalid
         
-        # Use last 2 positions for velocity calculation (most recent movement)
-        recent_positions = self.position_history[-2:]
-        
-        if len(recent_positions) < 2:
-            self.velocity = (0.0, 0.0)
-            return
-        
-        x1, y1, t1 = recent_positions[0]
-        x2, y2, t2 = recent_positions[1]
-        
-        dt = t2 - t1
+        # Predict with Kalman Filter
         if dt > 0:
-            # Velocity in pixels per second
-            self.velocity = ((x2 - x1) / dt, (y2 - y1) / dt)
-        else:
-            self.velocity = (0.0, 0.0)
+            self.kalman_filter.predict(dt)
+        
+        # Update Kalman Filter with measurement
+        self.kalman_filter.update(detection.x, detection.y)
+        
+        self.last_timestamp = timestamp
+    
+    @property
+    def velocity(self) -> Tuple[float, float]:
+        """Get velocity from Kalman Filter."""
+        if self.kalman_filter:
+            return self.kalman_filter.get_velocity()
+        return (0.0, 0.0)
     
     def predict(self, time_ahead_ms: float) -> Optional[Tuple[float, float]]:
         """
-        Predict future position.
+        Predict future position using Kalman Filter.
         
         Args:
             time_ahead_ms: Time to predict ahead in milliseconds
@@ -69,22 +214,14 @@ class Track:
         Returns:
             Predicted (x, y) position or None if prediction not possible
         """
-        if len(self.position_history) == 0:
+        if self.kalman_filter is None:
             return None
-        
-        # Get current position
-        current_x, current_y, _ = self.position_history[-1]
         
         # Convert time to seconds
         time_ahead_s = time_ahead_ms / 1000.0
         
-        # Predict using velocity
-        vx, vy = self.velocity
-        
-        predicted_x = current_x + vx * time_ahead_s
-        predicted_y = current_y + vy * time_ahead_s
-        
-        return (predicted_x, predicted_y)
+        # Use Kalman Filter to predict future position
+        return self.kalman_filter.predict_future(time_ahead_s)
     
     def increment_age(self):
         """Increment age counter (called when track is not matched)."""
@@ -142,8 +279,12 @@ class Tracker:
         for detection in unmatched_detections:
             track_id = self.next_id
             self.next_id += 1
-            self.tracks[track_id] = Track(track_id, detection)
-            self.tracks[track_id].position_history.append((detection.x, detection.y, timestamp))
+            new_track = Track(track_id, detection)
+            new_track.last_timestamp = timestamp
+            # Position history is already initialized in __post_init__, just update timestamp
+            if new_track.position_history:
+                new_track.position_history[-1] = (detection.x, detection.y, timestamp)
+            self.tracks[track_id] = new_track
         
         # Remove old tracks
         tracks_to_remove = [
