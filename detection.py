@@ -220,6 +220,51 @@ class DetectionModule:
         self.confidence_threshold = Config.YOLO_CONFIDENCE_THRESHOLD
         self.iou_threshold = Config.YOLO_IOU_THRESHOLD
         self.color_classifier = ColorClassifier()
+        self.device = self._get_device()
+    
+    def _get_device(self) -> str:
+        """
+        Get the device to use for inference.
+        
+        Returns:
+            str: Device string ("cpu", "cuda", "cuda:0", etc.)
+        """
+        device_config = Config.YOLO_DEVICE.lower()
+        
+        # If device is explicitly set, use it
+        if device_config in ["cpu", "cuda"]:
+            if device_config == "cuda" and not torch.cuda.is_available():
+                logger.warning("CUDA requested but not available. Falling back to CPU.")
+                return "cpu"
+            return device_config
+        
+        # Handle "cuda:0", "cuda:1", etc.
+        if device_config.startswith("cuda:"):
+            if not torch.cuda.is_available():
+                logger.warning(f"{device_config} requested but CUDA not available. Falling back to CPU.")
+                return "cpu"
+            device_id = device_config.split(":")[1]
+            if torch.cuda.device_count() > int(device_id):
+                return device_config
+            else:
+                logger.warning(f"CUDA device {device_id} not available. Using cuda:0 or CPU.")
+                return "cuda:0" if torch.cuda.is_available() else "cpu"
+        
+        # Auto-detect: prefer GPU if available
+        if device_config == "auto":
+            if torch.cuda.is_available():
+                device = "cuda:0"
+                logger.info(f"GPU detected: Using {device} (GPU: {torch.cuda.get_device_name(0)})")
+            else:
+                device = "cpu"
+                logger.info("No GPU detected: Using CPU")
+            return device
+        
+        # Fallback to auto if unknown value
+        logger.warning(f"Unknown device setting '{device_config}'. Using auto-detection.")
+        if torch.cuda.is_available():
+            return "cuda:0"
+        return "cpu"
     
     def set_confidence_threshold(self, threshold: float):
         """
@@ -278,7 +323,12 @@ class DetectionModule:
                     model_path = 'models/yolov8n.pt'
             
             self.model = YOLO(model_path)
-            logger.info("YOLO model loaded successfully")
+            # Move model to specified device (if supported)
+            try:
+                self.model.to(self.device)
+            except Exception as e:
+                logger.debug(f"Could not move model to device using .to() method: {e}. Device will be set during inference.")
+            logger.info(f"YOLO model loaded successfully on device: {self.device}")
             return True
         except Exception as e:
             logger.error(f"Error loading YOLO model: {str(e)}")
@@ -291,6 +341,12 @@ class DetectionModule:
                 except:
                     self.model = YOLO('yolov8n.pt')
                     logger.info("Default YOLOv8n model loaded successfully (will be downloaded if needed)")
+                # Move model to specified device (if supported)
+                try:
+                    self.model.to(self.device)
+                except Exception as e:
+                    logger.debug(f"Could not move model to device using .to() method: {e}. Device will be set during inference.")
+                logger.info(f"Default model loaded on device: {self.device}")
                 return True
             except Exception as e2:
                 logger.error(f"Failed to load default model: {str(e2)}")
@@ -314,9 +370,9 @@ class DetectionModule:
                 warmup_size = Config.YOLO_INPUT_SIZE
                 dummy_frame_size = (warmup_size, warmup_size)
             
-            logger.info(f"Warming up model with dummy inference (size: {dummy_frame_size[0]}x{dummy_frame_size[1]})...")
+            logger.info(f"Warming up model with dummy inference (size: {dummy_frame_size[0]}x{dummy_frame_size[1]}) on {self.device}...")
             dummy_frame = np.zeros((dummy_frame_size[1], dummy_frame_size[0], 3), dtype=np.uint8)
-            _ = self.model(dummy_frame, imgsz=Config.YOLO_INPUT_SIZE, verbose=False)
+            _ = self.model(dummy_frame, imgsz=Config.YOLO_INPUT_SIZE, device=self.device, verbose=False)
             logger.info("Model warmup complete")
         except Exception as e:
             logger.warning(f"Model warmup failed: {str(e)}")
@@ -342,6 +398,7 @@ class DetectionModule:
                 imgsz=Config.YOLO_INPUT_SIZE,  # Reduced input size (416 vs default 640) for better FPS
                 conf=self.confidence_threshold,
                 iou=self.iou_threshold,
+                device=self.device,  # Use configured device (GPU/CPU)
                 verbose=False
             )
             
