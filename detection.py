@@ -435,6 +435,13 @@ class DetectionModule:
                     # In production, you'd filter by class_id for balloon-specific classes
                     if 'balloon' in class_name.lower():
                         color_class = self.color_classifier.classify_color(frame, (x1, y1, x2, y2))
+                        
+                        # In balloon mode, only detect balloons of the selected color
+                        if Config.DETECT_MODE.lower() == "balloon":
+                            selected_color = getattr(Config, 'SELECTED_BALLOON_COLOR', 'red').lower()
+                            if color_class is None or color_class.lower() != selected_color:
+                                # Skip this detection - not the selected color
+                                continue
                     
                     # Create detection object
                     detection = Detection(
@@ -514,10 +521,17 @@ class DetectionModule:
             # Drones are always blacklist
             if 'drone' in det.class_name.lower():
                 blacklist.append(det)
-            # Balloons: check color
+            # Balloons: in balloon mode, selected color is blacklist
             elif 'balloon' in det.class_name.lower() and det.color_class:
-                if self.color_classifier.is_blacklist(det.color_class):
-                    blacklist.append(det)
+                if Config.DETECT_MODE.lower() == "balloon":
+                    # In balloon mode, selected color is treated as blacklist
+                    selected_color = getattr(Config, 'SELECTED_BALLOON_COLOR', 'red').lower()
+                    if det.color_class.lower() == selected_color:
+                        blacklist.append(det)
+                else:
+                    # In other modes, use standard blacklist check
+                    if self.color_classifier.is_blacklist(det.color_class):
+                        blacklist.append(det)
         
         return blacklist
 

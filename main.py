@@ -162,6 +162,9 @@ class DroneDetectionApp:
         # Connect mode change signal
         self.main_window.mode_changed.connect(self._on_mode_changed)
         
+        # Connect color change signal
+        self.main_window.color_changed.connect(self._on_color_changed)
+        
         # Connect confidence threshold change signal
         self.main_window.get_system_view().confidence_threshold_changed.connect(self._on_confidence_threshold_changed)
         
@@ -240,6 +243,13 @@ class DroneDetectionApp:
         # Set initial mode in UI
         self.main_window.set_mode(Config.DETECT_MODE)
         
+        # Set initial color if in balloon mode
+        if Config.DETECT_MODE.lower() == "balloon":
+            selected_color = getattr(Config, 'SELECTED_BALLOON_COLOR', 'red')
+            # Update blacklist to only include selected color
+            Config.BALLOON_BLACKLIST_COLORS = [selected_color]
+            self.main_window.set_color(selected_color)
+        
         # Initialize prediction horizon display
         self.main_window.get_system_view().update_prediction_horizon(self.prediction_horizon_ms)
         
@@ -257,6 +267,14 @@ class DroneDetectionApp:
         
         # Update config
         Config.DETECT_MODE = mode
+        
+        # If switching to balloon mode, initialize color selection
+        if mode.lower() == "balloon":
+            selected_color = getattr(Config, 'SELECTED_BALLOON_COLOR', 'red')
+            # Update blacklist to only include selected color
+            Config.BALLOON_BLACKLIST_COLORS = [selected_color]
+            # Ensure color selector is set correctly
+            self.main_window.set_color(selected_color)
         
         # Stop current detection thread
         if self.detection_thread and self.detection_thread.is_alive():
@@ -327,6 +345,22 @@ class DroneDetectionApp:
         Config.PREDICTION_HORIZON_MS = horizon_ms
         self.main_window.get_system_view().add_alert(
             f"Prediction horizon updated to {horizon_ms} ms", "INFO"
+        )
+    
+    def _on_color_changed(self, color: str):
+        """
+        Handle color selection change from UI.
+        
+        Args:
+            color: Selected color name
+        """
+        logger.info(f"Balloon color selection changed to: {color}")
+        # Update config
+        Config.SELECTED_BALLOON_COLOR = color
+        # Update blacklist colors to only include selected color
+        Config.BALLOON_BLACKLIST_COLORS = [color]
+        self.main_window.get_system_view().add_alert(
+            f"Balloon detection color set to: {color.capitalize()}", "INFO"
         )
     
     def process_frame(self):

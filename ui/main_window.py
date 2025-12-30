@@ -15,6 +15,9 @@ class MainWindow(QMainWindow):
     # Signal emitted when detection mode changes
     mode_changed = pyqtSignal(str)  # Emits "balloon", "drone", or "person"
     
+    # Signal emitted when color selection changes
+    color_changed = pyqtSignal(str)  # Emits color name (e.g., "red", "blue")
+    
     def __init__(self):
         """Initialize the main window."""
         super().__init__()
@@ -64,6 +67,46 @@ class MainWindow(QMainWindow):
         """)
         self.mode_combo.currentTextChanged.connect(self._on_mode_changed)
         toolbar_layout.addWidget(self.mode_combo)
+        
+        # Color selector (only visible when Balloon mode is selected)
+        color_label = QLabel("Color:")
+        color_label.setStyleSheet("color: white; font-weight: bold; font-size: 12px;")
+        self.color_label = color_label
+        toolbar_layout.addWidget(color_label)
+        
+        self.color_combo = QComboBox()
+        # Available colors from ColorClassifier
+        self.color_combo.addItems(["red", "white", "green", "blue", "black", "orange", "yellow"])
+        self.color_combo.setCurrentText("red")  # Default to red
+        self.color_combo.setStyleSheet("""
+            QComboBox {
+                background-color: #3b3b3b;
+                color: white;
+                border: 1px solid #555;
+                border-radius: 4px;
+                padding: 5px 10px;
+                min-width: 100px;
+                font-size: 12px;
+            }
+            QComboBox:hover {
+                background-color: #444;
+            }
+            QComboBox::drop-down {
+                border: none;
+                width: 20px;
+            }
+            QComboBox QAbstractItemView {
+                background-color: #3b3b3b;
+                color: white;
+                selection-background-color: #555;
+                border: 1px solid #555;
+            }
+        """)
+        self.color_combo.currentTextChanged.connect(self._on_color_changed)
+        toolbar_layout.addWidget(self.color_combo)
+        
+        # Initially hide color selector if not in balloon mode
+        self._update_color_selector_visibility()
         
         toolbar_layout.addStretch()  # Push mode selector to the left
         
@@ -129,6 +172,27 @@ class MainWindow(QMainWindow):
         """Handle mode selection change."""
         mode = mode_text.lower()
         self.mode_changed.emit(mode)
+        self._update_color_selector_visibility()
+    
+    def _update_color_selector_visibility(self):
+        """Show/hide color selector based on current mode."""
+        is_balloon_mode = self.mode_combo.currentText().lower() == "balloon"
+        self.color_label.setVisible(is_balloon_mode)
+        self.color_combo.setVisible(is_balloon_mode)
+    
+    def _on_color_changed(self, color: str):
+        """Handle color selection change."""
+        self.color_changed.emit(color.lower())
+    
+    def get_selected_color(self) -> str:
+        """Get currently selected color."""
+        return self.color_combo.currentText().lower()
+    
+    def set_color(self, color: str):
+        """Set color programmatically."""
+        color_capitalized = color.capitalize()
+        if color_capitalized in ["Red", "White", "Green", "Blue", "Black", "Orange", "Yellow"]:
+            self.color_combo.setCurrentText(color_capitalized)
     
     def get_current_mode(self) -> str:
         """Get current detection mode."""
