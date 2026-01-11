@@ -35,7 +35,7 @@ class PTUControl:
     PTU42_PITCH_MIN = -90.0
     PTU42_PITCH_MAX = 120.0
     
-    def __init__(self, model: str = "PTU57"):
+    def __init__(self, model: str = "PTU42"):
         """
         Initialize PTU control.
         
