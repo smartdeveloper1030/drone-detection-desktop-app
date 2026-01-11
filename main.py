@@ -189,6 +189,7 @@ class DroneDetectionApp:
         ptu_view.go_to_zero.connect(self._on_ptu_go_to_zero)
         ptu_view.set_speed.connect(self._on_ptu_set_speed)
         ptu_view.set_acceleration.connect(self._on_ptu_set_acceleration)
+        ptu_view.tracking_enabled_changed.connect(self.enable_ptu_tracking)
         
         # Processing state
         self.is_running = False

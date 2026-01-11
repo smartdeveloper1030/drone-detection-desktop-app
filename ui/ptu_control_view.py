@@ -26,6 +26,7 @@ class PTUControlView(QWidget):
     go_to_zero = pyqtSignal(int)  # speed
     set_speed = pyqtSignal(int)  # speed
     set_acceleration = pyqtSignal(int)  # acceleration percentage
+    tracking_enabled_changed = pyqtSignal(bool)  # enable/disable automatic tracking
     
     def __init__(self, parent=None):
         """Initialize the PTU control view."""
@@ -252,13 +253,23 @@ class PTUControlView(QWidget):
         permanent_zero_btn.clicked.connect(self._on_permanent_zero)
         layout.addWidget(permanent_zero_btn, 7, 2)
         
+        # Automatic tracking checkbox
+        self.auto_tracking_checkbox = QCheckBox("Enable Automatic Tracking")
+        self.auto_tracking_checkbox.setToolTip(
+            "When enabled, PTU will automatically move to track predicted object positions"
+        )
+        self.auto_tracking_checkbox.setChecked(False)
+        self.auto_tracking_checkbox.setStyleSheet("color: white;")
+        self.auto_tracking_checkbox.stateChanged.connect(self._on_tracking_toggled)
+        layout.addWidget(self.auto_tracking_checkbox, 8, 0, 1, 3)
+        
         # Keyboard control checkbox
         self.keyboard_control_checkbox = QCheckBox(
             "Keyboard arrow keys are allowed for control, but this will affect the focus of other controls."
         )
         self.keyboard_control_checkbox.setChecked(True)
         self.keyboard_control_checkbox.setStyleSheet("color: white;")
-        layout.addWidget(self.keyboard_control_checkbox, 8, 0, 1, 3)
+        layout.addWidget(self.keyboard_control_checkbox, 9, 0, 1, 3)
         
         # Store button references for enabling/disabling
         self.control_buttons = [
@@ -511,6 +522,13 @@ class PTUControlView(QWidget):
             self.add_output(f"Sent: {command}")
             # Command sending would be handled by main application
             self.send_input.clear()
+    
+    def _on_tracking_toggled(self, state):
+        """Handle automatic tracking checkbox toggle."""
+        enabled = (state == Qt.Checked)
+        self.tracking_enabled_changed.emit(enabled)
+        status = "enabled" if enabled else "disabled"
+        self.add_output(f"Automatic tracking {status}")
     
     # Public methods
     def update_connection_status(self, connected: bool, port: str = ""):
