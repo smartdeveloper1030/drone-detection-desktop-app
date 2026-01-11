@@ -6,6 +6,7 @@ import logging
 import time
 import threading
 from queue import Queue, Empty
+from typing import Tuple
 
 # IMPORTANT: Import torch BEFORE PyQt5 to avoid DLL conflicts on Windows
 # This must be done before any PyQt5 imports
@@ -21,6 +22,8 @@ from camera_module import CameraModule
 from detection import DetectionModule, Detection
 from tracking import Tracker
 from ui.main_window import MainWindow
+from ptu_control import PTUControl
+from coordinate_converter import CoordinateConverter
 
 # Configure logging
 logging.basicConfig(
@@ -159,6 +162,11 @@ class DroneDetectionApp:
         self.detector = DetectionModule()
         self.tracker = Tracker(max_age=5, min_hits=1, iou_threshold=0.3)
         
+        # PTU control
+        self.ptu = PTUControl(model="PTU57")
+        self.coordinate_converter = None  # Will be initialized after camera connection
+        self.ptu_tracking_enabled = False
+        
         # Connect mode change signal
         self.main_window.mode_changed.connect(self._on_mode_changed)
         
@@ -170,6 +178,17 @@ class DroneDetectionApp:
         
         # Connect prediction horizon change signal
         self.main_window.get_system_view().prediction_horizon_changed.connect(self._on_prediction_horizon_changed)
+        
+        # Connect PTU control signals
+        ptu_view = self.main_window.get_ptu_control_view()
+        ptu_view.connect_requested.connect(self._on_ptu_connect)
+        ptu_view.disconnect_requested.connect(self._on_ptu_disconnect)
+        ptu_view.move_to_position.connect(self._on_ptu_move_to_position)
+        ptu_view.move_relative.connect(self._on_ptu_move_relative)
+        ptu_view.stop_requested.connect(self._on_ptu_stop)
+        ptu_view.go_to_zero.connect(self._on_ptu_go_to_zero)
+        ptu_view.set_speed.connect(self._on_ptu_set_speed)
+        ptu_view.set_acceleration.connect(self._on_ptu_set_acceleration)
         
         # Processing state
         self.is_running = False
@@ -226,6 +245,20 @@ class DroneDetectionApp:
         self.main_window.get_system_view().add_alert(
             f"Camera connected - Test Mode: {Config.TEST_OPTION}", "INFO"
         )
+        
+        # Initialize coordinate converter with camera dimensions
+        frame_width, frame_height = self.camera.get_frame_size()
+        if frame_width > 0 and frame_height > 0:
+            self.coordinate_converter = CoordinateConverter(
+                image_width=frame_width,
+                image_height=frame_height,
+                horizontal_fov=60.0,  # Default FOV, can be configured
+                vertical_fov=45.0
+            )
+            logger.info(f"Coordinate converter initialized: {frame_width}x{frame_height}")
+        
+        # Update available PTU ports
+        self._update_ptu_ports()
         
         # Start detection thread
         self.detection_thread = DetectionThread(
@@ -428,8 +461,18 @@ class DroneDetectionApp:
         # Update prediction horizon display
         self.main_window.get_system_view().update_prediction_horizon(self.prediction_horizon_ms)
         
-        # Servo crosshair (placeholder for future implementation)
+        # Calculate servo crosshair position (current PTU position in pixel coordinates)
         servo_crosshair = None
+        if self.ptu.is_connected and self.coordinate_converter:
+            current_azimuth, current_pitch = self.ptu.get_position()
+            servo_x, servo_y = self.coordinate_converter.angle_to_pixel(
+                current_azimuth, current_pitch, current_azimuth, current_pitch
+            )
+            servo_crosshair = (servo_x, servo_y)
+            
+            # Move PTU to track predicted point if tracking is enabled
+            if self.ptu_tracking_enabled and predicted_point:
+                self._move_ptu_to_point(predicted_point)
         
         # Update operator view IMMEDIATELY with current frame and latest detections
         # This ensures smooth display regardless of detection speed
@@ -542,7 +585,121 @@ class DroneDetectionApp:
         
         # Release camera
         self.camera.release()
+        
+        # Disconnect PTU
+        if self.ptu.is_connected:
+            self.ptu.disconnect()
+        
         logger.info("Cleanup complete")
+    
+    def _update_ptu_ports(self):
+        """Update available PTU serial ports in the UI."""
+        ports = self.ptu.get_available_ports()
+        self.main_window.get_ptu_control_view().update_available_ports(ports)
+    
+    def _on_ptu_connect(self, port: str, baud_rate: int):
+        """Handle PTU connection request."""
+        logger.info(f"Connecting to PTU on {port} at {baud_rate} baud")
+        success = self.ptu.connect(port, baud_rate)
+        
+        if success:
+            self.main_window.get_ptu_control_view().update_connection_status(True, port)
+            self.main_window.get_system_view().add_alert(
+                f"PTU connected on {port}", "INFO"
+            )
+            # Update position display
+            azimuth, pitch = self.ptu.get_position()
+            self.main_window.get_ptu_control_view().update_position(azimuth, pitch)
+        else:
+            self.main_window.get_ptu_control_view().update_connection_status(False)
+            self.main_window.get_system_view().add_alert(
+                f"Failed to connect to PTU on {port}", "ERROR"
+            )
+    
+    def _on_ptu_disconnect(self):
+        """Handle PTU disconnection request."""
+        logger.info("Disconnecting from PTU")
+        self.ptu.disconnect()
+        self.main_window.get_ptu_control_view().update_connection_status(False)
+        self.main_window.get_system_view().add_alert("PTU disconnected", "INFO")
+    
+    def _on_ptu_move_to_position(self, azimuth: float, pitch: float, speed: int):
+        """Handle PTU move to absolute position."""
+        if self.ptu.is_connected:
+            success = self.ptu.move_to_position(azimuth, pitch, speed)
+            if success:
+                self.main_window.get_ptu_control_view().update_position(azimuth, pitch)
+            else:
+                self.main_window.get_system_view().add_alert(
+                    f"Failed to move PTU to ({azimuth:.1f}°, {pitch:.1f}°)", "ERROR"
+                )
+    
+    def _on_ptu_move_relative(self, delta_azimuth: float, delta_pitch: float, speed: int):
+        """Handle PTU relative movement."""
+        if self.ptu.is_connected:
+            success = self.ptu.move_relative(delta_azimuth, delta_pitch, speed)
+            if success:
+                azimuth, pitch = self.ptu.get_position()
+                self.main_window.get_ptu_control_view().update_position(azimuth, pitch)
+    
+    def _on_ptu_stop(self):
+        """Handle PTU stop request."""
+        if self.ptu.is_connected:
+            self.ptu.stop()
+    
+    def _on_ptu_go_to_zero(self, speed: int):
+        """Handle PTU go to zero position."""
+        if self.ptu.is_connected:
+            success = self.ptu.go_to_zero(speed)
+            if success:
+                self.main_window.get_ptu_control_view().update_position(0.0, 0.0)
+    
+    def _on_ptu_set_speed(self, speed: int):
+        """Handle PTU speed setting."""
+        if self.ptu.is_connected:
+            self.ptu.set_speed(speed)
+    
+    def _on_ptu_set_acceleration(self, acceleration: int):
+        """Handle PTU acceleration setting."""
+        # Acceleration is typically handled by the PTU firmware
+        # This is a placeholder for future implementation
+        pass
+    
+    def _move_ptu_to_point(self, point: Tuple[float, float]):
+        """
+        Move PTU to track a predicted point.
+        
+        Args:
+            point: (x, y) pixel coordinates
+        """
+        if not self.ptu.is_connected or not self.coordinate_converter:
+            return
+        
+        pixel_x, pixel_y = point
+        current_azimuth, current_pitch = self.ptu.get_position()
+        
+        # Convert pixel to angle
+        new_azimuth, new_pitch = self.coordinate_converter.pixel_to_angle(
+            pixel_x, pixel_y, current_azimuth, current_pitch
+        )
+        
+        # Move PTU (with speed from UI)
+        ptu_view = self.main_window.get_ptu_control_view()
+        speed = getattr(ptu_view, 'current_speed', 20)
+        
+        success = self.ptu.move_to_position(new_azimuth, new_pitch, speed)
+        if success:
+            self.main_window.get_ptu_control_view().update_position(new_azimuth, new_pitch)
+    
+    def enable_ptu_tracking(self, enable: bool):
+        """
+        Enable/disable automatic PTU tracking of predicted points.
+        
+        Args:
+            enable: True to enable tracking, False to disable
+        """
+        self.ptu_tracking_enabled = enable
+        logger.info(f"PTU tracking {'enabled' if enable else 'disabled'}")
 
 
 def main():
