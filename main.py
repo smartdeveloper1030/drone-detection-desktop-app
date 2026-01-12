@@ -587,9 +587,12 @@ class DroneDetectionApp:
         # Release camera
         self.camera.release()
         
-        # Disconnect PTU
+        # Disconnect PTU and cleanup thread
         if self.ptu.is_connected:
             self.ptu.disconnect()
+        # Cleanup PTU thread
+        if hasattr(self.ptu, 'cleanup'):
+            self.ptu.cleanup()
         
         logger.info("Cleanup complete")
     
