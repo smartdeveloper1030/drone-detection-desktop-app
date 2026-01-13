@@ -191,6 +191,7 @@ class DroneDetectionApp:
         ptu_view.set_speed.connect(self._on_ptu_set_speed)
         ptu_view.set_acceleration.connect(self._on_ptu_set_acceleration)
         ptu_view.tracking_enabled_changed.connect(self.enable_ptu_tracking)
+        ptu_view.send_raw_command.connect(self._on_ptu_send_raw_command)
         
         # Set up command history callback to show all communication in UI
         def history_callback(command, status, response):
@@ -687,6 +688,11 @@ class DroneDetectionApp:
         """Handle PTU acceleration setting."""
         if self.ptu.is_connected:
             self.ptu.set_acceleration(acceleration)
+    
+    def _on_ptu_send_raw_command(self, command: str):
+        """Handle raw command sending (without waiting for Done response)."""
+        if self.ptu.is_connected:
+            self.ptu.send_raw_command(command)
     
     def _move_ptu_to_point(self, point: Tuple[float, float]):
         """

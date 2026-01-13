@@ -26,6 +26,7 @@ class PTUCommandType(Enum):
     SET_SPEED = "set_speed"
     SET_ACCELERATION = "set_acceleration"
     GET_POSITION = "get_position"
+    SEND_RAW_COMMAND = "send_raw_command"  # Send raw command without waiting for Done
     SHUTDOWN = "shutdown"
 
 
@@ -150,6 +151,8 @@ class PTUControlThread(threading.Thread):
                 return self._handle_set_speed(args)
             elif command_type == PTUCommandType.GET_POSITION:
                 return self._handle_get_position()
+            elif command_type == PTUCommandType.SEND_RAW_COMMAND:
+                return self._handle_send_raw_command(args)
             elif command_type == PTUCommandType.SHUTDOWN:
                 self.is_running = False
                 return {'success': True}
@@ -382,6 +385,19 @@ class PTUControlThread(threading.Thread):
             azimuth = self.current_azimuth
             pitch = self.current_pitch
         return {'success': True, 'azimuth': azimuth, 'pitch': pitch}
+    
+    def _handle_send_raw_command(self, args: Dict[str, Any]) -> Dict[str, Any]:
+        """Handle raw command sending without waiting for Done response."""
+        if not self.is_connected:
+            return {'success': False, 'error': 'PTU not connected'}
+        
+        command = args.get('command', '')
+        if not command:
+            return {'success': False, 'error': 'No command provided'}
+        
+        # Send command without waiting for Done response
+        success = self._send_command(command, wait_for_done=False, timeout=0.0)
+        return {'success': success, 'command': command}
     
     def _send_command(self, command: str, wait_for_done: bool = True, timeout: float = 2.0) -> bool:
         """
@@ -827,6 +843,27 @@ class PTUControl:
             PTUCommandType.MOVE_DIRECTIONAL,
             {'direction': direction, 'speed': speed},
             timeout=1.0
+        )
+        return result.get('success', False)
+    
+    def send_raw_command(self, command: str) -> bool:
+        """
+        Send raw command to PTU without waiting for 'Done' response (non-blocking, uses thread).
+        
+        Args:
+            command: Raw command string to send (e.g., "H12,45,30,20E")
+        
+        Returns:
+            True if command sent successfully
+        """
+        if not self.is_connected:
+            logger.error("PTU not connected")
+            return False
+        
+        result = self.thread.send_command(
+            PTUCommandType.SEND_RAW_COMMAND,
+            {'command': command},
+            timeout=0.5
         )
         return result.get('success', False)
     

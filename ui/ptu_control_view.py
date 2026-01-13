@@ -28,6 +28,7 @@ class PTUControlView(QWidget):
     set_speed = pyqtSignal(int)  # speed
     set_acceleration = pyqtSignal(int)  # acceleration percentage
     tracking_enabled_changed = pyqtSignal(bool)  # enable/disable automatic tracking
+    send_raw_command = pyqtSignal(str)  # raw command string
     
     def __init__(self, parent=None):
         """Initialize the PTU control view."""
@@ -396,8 +397,7 @@ class PTUControlView(QWidget):
         """Handle send command."""
         command = self.send_input.text()
         if command:
-            self.add_output(f"Sent: {command}")
-            # Command sending would be handled by main application
+            self.send_raw_command.emit(command)
             self.send_input.clear()
     
     def _on_tracking_toggled(self, state):
