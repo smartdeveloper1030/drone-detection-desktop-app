@@ -185,6 +185,7 @@ class DroneDetectionApp:
         ptu_view.disconnect_requested.connect(self._on_ptu_disconnect)
         ptu_view.move_to_position.connect(self._on_ptu_move_to_position)
         ptu_view.move_relative.connect(self._on_ptu_move_relative)
+        ptu_view.move_directional.connect(self._on_ptu_move_directional)
         ptu_view.stop_requested.connect(self._on_ptu_stop)
         ptu_view.go_to_zero.connect(self._on_ptu_go_to_zero)
         ptu_view.set_speed.connect(self._on_ptu_set_speed)
@@ -659,6 +660,11 @@ class DroneDetectionApp:
             if success:
                 azimuth, pitch = self.ptu.get_position()
                 self.main_window.get_ptu_control_view().update_position(azimuth, pitch)
+    
+    def _on_ptu_move_directional(self, direction: str, speed: int):
+        """Handle PTU directional movement using H61/H62/H63/H64 commands."""
+        if self.ptu.is_connected:
+            self.ptu.move_directional(direction, speed)
     
     def _on_ptu_stop(self):
         """Handle PTU stop request."""

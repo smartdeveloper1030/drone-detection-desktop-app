@@ -22,6 +22,7 @@ class PTUControlView(QWidget):
     disconnect_requested = pyqtSignal()
     move_to_position = pyqtSignal(float, float, int)  # azimuth, pitch, speed
     move_relative = pyqtSignal(float, float, int)  # delta_azimuth, delta_pitch, speed
+    move_directional = pyqtSignal(str, int)  # direction, speed
     stop_requested = pyqtSignal()
     go_to_zero = pyqtSignal(int)  # speed
     set_speed = pyqtSignal(int)  # speed
@@ -195,12 +196,12 @@ class PTUControlView(QWidget):
         # Directional control buttons (3x3 grid)
         # Top row
         up_btn = QPushButton("Up ↑")
-        up_btn.clicked.connect(lambda: self._on_directional_move(0, -5))
+        up_btn.clicked.connect(lambda: self._on_directional_move('up'))
         layout.addWidget(up_btn, 2, 1)
         
         # Middle row
         left_btn = QPushButton("← Left")
-        left_btn.clicked.connect(lambda: self._on_directional_move(-5, 0))
+        left_btn.clicked.connect(lambda: self._on_directional_move('left'))
         layout.addWidget(left_btn, 3, 0)
         
         pause_btn = QPushButton("Pause")
@@ -208,12 +209,12 @@ class PTUControlView(QWidget):
         layout.addWidget(pause_btn, 3, 1)
         
         right_btn = QPushButton("Right →")
-        right_btn.clicked.connect(lambda: self._on_directional_move(5, 0))
+        right_btn.clicked.connect(lambda: self._on_directional_move('right'))
         layout.addWidget(right_btn, 3, 2)
         
         # Bottom row
         down_btn = QPushButton("Down ↓")
-        down_btn.clicked.connect(lambda: self._on_directional_move(0, 5))
+        down_btn.clicked.connect(lambda: self._on_directional_move('down'))
         layout.addWidget(down_btn, 4, 1)
         
         # Automatic tracking checkbox
@@ -347,9 +348,9 @@ class PTUControlView(QWidget):
         self.accel_label.setText(f"{value}%")
         self.set_acceleration.emit(value)
     
-    def _on_directional_move(self, delta_azimuth: float, delta_pitch: float):
-        """Handle directional movement."""
-        self.move_relative.emit(delta_azimuth, delta_pitch, self.current_speed)
+    def _on_directional_move(self, direction: str):
+        """Handle directional movement using H61/H62/H63/H64 commands."""
+        self.move_directional.emit(direction, self.current_speed)
     
     def _on_pause(self):
         """Handle pause button."""

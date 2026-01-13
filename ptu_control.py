@@ -20,6 +20,7 @@ class PTUCommandType(Enum):
     DISCONNECT = "disconnect"
     MOVE_TO_POSITION = "move_to_position"
     MOVE_RELATIVE = "move_relative"
+    MOVE_DIRECTIONAL = "move_directional"  # H61/H62/H63/H64 commands
     STOP = "stop"
     GO_TO_ZERO = "go_to_zero"
     SET_SPEED = "set_speed"
@@ -139,6 +140,8 @@ class PTUControlThread(threading.Thread):
                 return self._handle_move_to_position(args)
             elif command_type == PTUCommandType.MOVE_RELATIVE:
                 return self._handle_move_relative(args)
+            elif command_type == PTUCommandType.MOVE_DIRECTIONAL:
+                return self._handle_move_directional(args)
             elif command_type == PTUCommandType.STOP:
                 return self._handle_stop()
             elif command_type == PTUCommandType.GO_TO_ZERO:
@@ -316,20 +319,37 @@ class PTUControlThread(threading.Thread):
             'speed': speed
         })
     
-    def _handle_stop(self) -> Dict[str, Any]:
-        """Handle stop command."""
+    def _handle_move_directional(self, args: Dict[str, Any]) -> Dict[str, Any]:
+        """Handle directional movement command (H61/H62/H63/H64)."""
         if not self.is_connected:
             return {'success': False, 'error': 'PTU not connected'}
         
-        with self.position_lock:
-            current_azimuth = self.current_azimuth
-            current_pitch = self.current_pitch
+        direction = args.get('direction')  # 'left', 'right', 'up', 'down'
+        speed = args.get('speed', self.default_speed)
         
-        # Move to current position with 0 speed to stop movement
-        # Convert to integers for PTU command format
-        azimuth_int = int(round(current_azimuth))
-        pitch_int = int(round(current_pitch))
-        command = f"H12,{azimuth_int},{pitch_int},0E"
+        # Map direction to command
+        command_map = {
+            'left': 'H61',
+            'right': 'H62',
+            'up': 'H63',
+            'down': 'H64'
+        }
+        
+        if direction not in command_map:
+            return {'success': False, 'error': f'Invalid direction: {direction}'}
+        
+        # Format command: H61,<speed>E (or H62, H63, H64)
+        command = f"{command_map[direction]},{speed}E"
+        success = self._send_command(command, wait_for_done=True, timeout=2.0)
+        return {'success': success, 'command': command}
+    
+    def _handle_stop(self) -> Dict[str, Any]:
+        """Handle stop command using H65E."""
+        if not self.is_connected:
+            return {'success': False, 'error': 'PTU not connected'}
+        
+        # Send H65E command to stop movement
+        command = "H65E"
         success = self._send_command(command, wait_for_done=True, timeout=2.0)
         return {'success': success, 'command': command}
     
@@ -787,6 +807,28 @@ class PTUControl:
             True if command sent successfully
         """
         return self.move_to_position(0.0, 0.0, speed)
+    
+    def move_directional(self, direction: str, speed: int = 20) -> bool:
+        """
+        Move PTU in a direction using H61/H62/H63/H64 commands (non-blocking, uses thread).
+        
+        Args:
+            direction: Direction ('left', 'right', 'up', 'down')
+            speed: Movement speed (0-100, percentage)
+        
+        Returns:
+            True if command sent successfully
+        """
+        if not self.is_connected:
+            logger.error("PTU not connected")
+            return False
+        
+        result = self.thread.send_command(
+            PTUCommandType.MOVE_DIRECTIONAL,
+            {'direction': direction, 'speed': speed},
+            timeout=1.0
+        )
+        return result.get('success', False)
     
     def stop(self) -> bool:
         """
