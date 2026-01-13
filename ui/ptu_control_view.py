@@ -108,6 +108,10 @@ class PTUControlView(QWidget):
                 border-radius: 4px;
                 padding: 5px;
             }
+            QLineEdit:read-only {
+                background-color: #2b2b2b;
+                color: #aaa;
+            }
             QComboBox {
                 background-color: #3b3b3b;
                 color: white;
@@ -138,120 +142,79 @@ class PTUControlView(QWidget):
         layout = QGridLayout()
         layout.setSpacing(10)
         
-        # Pitch angle input
+        # Pitch angle input (read-only)
         pitch_label = QLabel("Pitch Angle:")
         pitch_label.setStyleSheet("color: white;")
         layout.addWidget(pitch_label, 0, 0)
         
-        self.pitch_input = QDoubleSpinBox()
-        self.pitch_input.setRange(-90.0, 135.0)
-        self.pitch_input.setDecimals(2)
-        self.pitch_input.setValue(0.0)
-        self.pitch_input.setSuffix("°")
-        layout.addWidget(self.pitch_input, 0, 1)
+        self.pitch_input = QLineEdit()
+        self.pitch_input.setReadOnly(True)
+        self.pitch_input.setText("0.00°")
+        layout.addWidget(self.pitch_input, 0, 1, 1, 2)
         
-        pitch_sure_btn = QPushButton("Sure")
-        pitch_sure_btn.clicked.connect(self._on_pitch_set)
-        layout.addWidget(pitch_sure_btn, 0, 2)
-        
-        # Azimuth angle input
+        # Azimuth angle input (read-only)
         azimuth_label = QLabel("Azimuth:")
         azimuth_label.setStyleSheet("color: white;")
         layout.addWidget(azimuth_label, 1, 0)
         
-        self.azimuth_input = QDoubleSpinBox()
-        self.azimuth_input.setRange(-90.0, 180.0)
-        self.azimuth_input.setDecimals(2)
-        self.azimuth_input.setValue(0.0)
-        self.azimuth_input.setSuffix("°")
-        layout.addWidget(self.azimuth_input, 1, 1)
-        
-        azimuth_sure_btn = QPushButton("Sure")
-        azimuth_sure_btn.clicked.connect(self._on_azimuth_set)
-        layout.addWidget(azimuth_sure_btn, 1, 2)
-        
-        # Control buttons
-        linkage_btn = QPushButton("Linkage")
-        linkage_btn.clicked.connect(self._on_linkage)
-        layout.addWidget(linkage_btn, 2, 0)
-        
-        zero_btn = QPushButton("Zero Position")
-        zero_btn.clicked.connect(self._on_zero_position)
-        layout.addWidget(zero_btn, 2, 1)
-        
-        restart_btn = QPushButton("Restart")
-        restart_btn.clicked.connect(self._on_restart)
-        layout.addWidget(restart_btn, 2, 2)
+        self.azimuth_input = QLineEdit()
+        self.azimuth_input.setReadOnly(True)
+        self.azimuth_input.setText("0.00°")
+        layout.addWidget(self.azimuth_input, 1, 1, 1, 2)
         
         # Speed slider
         speed_label = QLabel("Speed:")
         speed_label.setStyleSheet("color: white;")
-        layout.addWidget(speed_label, 3, 0)
+        layout.addWidget(speed_label, 5, 0)
         
         self.speed_slider = QSlider(Qt.Horizontal)
         self.speed_slider.setRange(0, 100)
         self.speed_slider.setValue(5)
         self.speed_slider.valueChanged.connect(self._on_speed_changed)
-        layout.addWidget(self.speed_slider, 3, 1, 1, 2)
+        layout.addWidget(self.speed_slider, 5, 1, 1, 2)
         
         self.speed_label = QLabel("5%")
         self.speed_label.setStyleSheet("color: white; min-width: 50px;")
-        layout.addWidget(self.speed_label, 3, 3)
+        layout.addWidget(self.speed_label, 5, 3)
         
         # Acceleration slider
         accel_label = QLabel("Acceleration:")
         accel_label.setStyleSheet("color: white;")
-        layout.addWidget(accel_label, 4, 0)
+        layout.addWidget(accel_label, 6, 0)
         
         self.accel_slider = QSlider(Qt.Horizontal)
         self.accel_slider.setRange(0, 100)
         self.accel_slider.setValue(5)
         self.accel_slider.valueChanged.connect(self._on_acceleration_changed)
-        layout.addWidget(self.accel_slider, 4, 1, 1, 2)
+        layout.addWidget(self.accel_slider, 6, 1, 1, 2)
         
         self.accel_label = QLabel("5%")
         self.accel_label.setStyleSheet("color: white; min-width: 50px;")
-        layout.addWidget(self.accel_label, 4, 3)
+        layout.addWidget(self.accel_label, 6, 3)
         
         # Directional control buttons (3x3 grid)
         # Top row
-        return_bearing_btn = QPushButton("Return Bearing")
-        return_bearing_btn.clicked.connect(lambda: self._on_directional_move(0, 0))
-        layout.addWidget(return_bearing_btn, 5, 0)
-        
         up_btn = QPushButton("Up ↑")
         up_btn.clicked.connect(lambda: self._on_directional_move(0, -5))
-        layout.addWidget(up_btn, 5, 1)
-        
-        return_pitch_btn = QPushButton("Return to Pitch")
-        return_pitch_btn.clicked.connect(lambda: self._on_directional_move(0, 0))
-        layout.addWidget(return_pitch_btn, 5, 2)
+        layout.addWidget(up_btn, 2, 1)
         
         # Middle row
         left_btn = QPushButton("← Left")
         left_btn.clicked.connect(lambda: self._on_directional_move(-5, 0))
-        layout.addWidget(left_btn, 6, 0)
+        layout.addWidget(left_btn, 3, 0)
         
         pause_btn = QPushButton("Pause")
         pause_btn.clicked.connect(self._on_pause)
-        layout.addWidget(pause_btn, 6, 1)
+        layout.addWidget(pause_btn, 3, 1)
         
         right_btn = QPushButton("Right →")
         right_btn.clicked.connect(lambda: self._on_directional_move(5, 0))
-        layout.addWidget(right_btn, 6, 2)
+        layout.addWidget(right_btn, 3, 2)
         
         # Bottom row
-        temp_zero_btn = QPushButton("Temporary Zero")
-        temp_zero_btn.clicked.connect(self._on_temp_zero)
-        layout.addWidget(temp_zero_btn, 7, 0)
-        
         down_btn = QPushButton("Down ↓")
         down_btn.clicked.connect(lambda: self._on_directional_move(0, 5))
-        layout.addWidget(down_btn, 7, 1)
-        
-        permanent_zero_btn = QPushButton("Permanent Zero")
-        permanent_zero_btn.clicked.connect(self._on_permanent_zero)
-        layout.addWidget(permanent_zero_btn, 7, 2)
+        layout.addWidget(down_btn, 4, 1)
         
         # Automatic tracking checkbox
         self.auto_tracking_checkbox = QCheckBox("Enable Automatic Tracking")
@@ -261,7 +224,7 @@ class PTUControlView(QWidget):
         self.auto_tracking_checkbox.setChecked(False)
         self.auto_tracking_checkbox.setStyleSheet("color: white;")
         self.auto_tracking_checkbox.stateChanged.connect(self._on_tracking_toggled)
-        layout.addWidget(self.auto_tracking_checkbox, 8, 0, 1, 3)
+        layout.addWidget(self.auto_tracking_checkbox, 7, 0, 1, 3)
         
         # Keyboard control checkbox
         self.keyboard_control_checkbox = QCheckBox(
@@ -269,13 +232,11 @@ class PTUControlView(QWidget):
         )
         self.keyboard_control_checkbox.setChecked(True)
         self.keyboard_control_checkbox.setStyleSheet("color: white;")
-        layout.addWidget(self.keyboard_control_checkbox, 9, 0, 1, 3)
+        layout.addWidget(self.keyboard_control_checkbox, 8, 0, 1, 3)
         
         # Store button references for enabling/disabling
         self.control_buttons = [
-            linkage_btn, zero_btn, restart_btn, up_btn, left_btn, right_btn,
-            down_btn, pause_btn, temp_zero_btn, permanent_zero_btn,
-            return_bearing_btn, return_pitch_btn, pitch_sure_btn, azimuth_sure_btn
+            up_btn, left_btn, right_btn, down_btn, pause_btn
         ]
         
         panel.setLayout(layout)
@@ -374,34 +335,6 @@ class PTUControlView(QWidget):
             baud_rate = int(self.baud_combo.currentText())
             self.connect_requested.emit(port, baud_rate)
     
-    def _on_pitch_set(self):
-        """Handle pitch angle set."""
-        pitch = self.pitch_input.value()
-        self.move_to_position.emit(self.current_azimuth, pitch, self.current_speed)
-    
-    def _on_azimuth_set(self):
-        """Handle azimuth angle set."""
-        azimuth = self.azimuth_input.value()
-        self.move_to_position.emit(azimuth, self.current_pitch, self.current_speed)
-    
-    def _on_linkage(self):
-        """Handle linkage button."""
-        # Move to both angles simultaneously
-        azimuth = self.azimuth_input.value()
-        pitch = self.pitch_input.value()
-        self.move_to_position.emit(azimuth, pitch, self.current_speed)
-    
-    def _on_zero_position(self):
-        """Handle zero position button."""
-        self.go_to_zero.emit(self.current_speed)
-    
-    def _on_restart(self):
-        """Handle restart button."""
-        # Disconnect and reconnect
-        if self.is_connected:
-            self.disconnect_requested.emit()
-        # Reconnect will be handled by main application
-    
     def _on_speed_changed(self, value: int):
         """Handle speed slider change."""
         self.current_speed = value
@@ -422,17 +355,6 @@ class PTUControlView(QWidget):
         """Handle pause button."""
         self.stop_requested.emit()
     
-    def _on_temp_zero(self):
-        """Handle temporary zero."""
-        self.go_to_zero.emit(self.current_speed)
-    
-    def _on_permanent_zero(self):
-        """Handle permanent zero."""
-        # Set current position as zero
-        self.current_azimuth = 0.0
-        self.current_pitch = 0.0
-        self.azimuth_input.setValue(0.0)
-        self.pitch_input.setValue(0.0)
     
     def _on_program_run(self):
         """Handle program run."""
@@ -511,8 +433,8 @@ class PTUControlView(QWidget):
         """Update current position display."""
         self.current_azimuth = azimuth
         self.current_pitch = pitch
-        self.azimuth_input.setValue(azimuth)
-        self.pitch_input.setValue(pitch)
+        self.azimuth_input.setText(f"{azimuth:.2f}°")
+        self.pitch_input.setText(f"{pitch:.2f}°")
     
     def add_output(self, message: str):
         """Add message to output area (deprecated - use add_command_history instead)."""
