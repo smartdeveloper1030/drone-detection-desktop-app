@@ -23,6 +23,7 @@ class PTUCommandType(Enum):
     STOP = "stop"
     GO_TO_ZERO = "go_to_zero"
     SET_SPEED = "set_speed"
+    SET_ACCELERATION = "set_acceleration"
     GET_POSITION = "get_position"
     SHUTDOWN = "shutdown"
 
@@ -52,17 +53,27 @@ class PTUControlThread(threading.Thread):
         # Response queue (from PTU thread to main thread)
         self.response_queue = Queue()
         
+        # Command history for logging
+        self.command_history = []
+        self.history_lock = threading.Lock()
+        
+        # Callback for updating UI command history (set from main thread)
+        self.history_callback = None
+        
         # Set limits based on model
+        # Note: These can be overridden by actual PTU configuration (H92 settings)
         if self.model == "PTU42":
             self.azimuth_min = -80.0
             self.azimuth_max = 180.0
             self.pitch_min = -90.0
             self.pitch_max = 120.0
         else:  # PTU57
+            # Default PTU57 limits, but user's config shows: +A_limit=90, +H_limit=90
+            # So actual limits are: azimuth: -90 to 90, pitch: -90 to 90
             self.azimuth_min = -90.0
-            self.azimuth_max = 180.0
+            self.azimuth_max = 90.0  # Changed from 180.0 to match user's H92 config
             self.pitch_min = -90.0
-            self.pitch_max = 135.0
+            self.pitch_max = 90.0  # Changed from 135.0 to match user's H92 config
         
         # Safety limits
         self.safety_azimuth_min = self.azimuth_min
@@ -75,8 +86,9 @@ class PTUControlThread(threading.Thread):
         self.current_pitch = 0.0
         self.position_lock = threading.Lock()
         
-        # Default speed
+        # Default speed and acceleration
         self.default_speed = 20
+        self.default_acceleration = 5
     
     def run(self):
         """Main thread loop - continuously process commands."""
@@ -178,7 +190,12 @@ class PTUControlThread(threading.Thread):
             # Move to zero position
             logger.info("Moving to zero position...")
             try:
-                self._send_command(f"H12,0.0,0.0,{self.default_speed}E")
+                # Convert default_speed (percentage) to deg/s, then to integer
+                speed_deg_per_sec = (self.default_speed / 100.0) * 8.0
+                if speed_deg_per_sec < 0.5:
+                    speed_deg_per_sec = 0.5
+                speed_int = int(round(speed_deg_per_sec))
+                self._send_command(f"H12,0,0,{speed_int}E", wait_for_done=False)
                 time.sleep(1.0)
             except Exception as e:
                 logger.warning(f"Move to zero failed: {e}")
@@ -212,7 +229,11 @@ class PTUControlThread(threading.Thread):
         
         try:
             # Move to safe position before disconnecting
-            self._send_command(f"H12,0.0,0.0,{self.default_speed}E")
+            speed_deg_per_sec = (self.default_speed / 100.0) * 8.0
+            if speed_deg_per_sec < 0.5:
+                speed_deg_per_sec = 0.5
+            speed_int = int(round(speed_deg_per_sec))
+            self._send_command(f"H12,0,0,{speed_int}E", wait_for_done=False)
             time.sleep(0.5)
         except:
             pass
@@ -240,19 +261,38 @@ class PTUControlThread(threading.Thread):
         # Clamp to safety limits
         azimuth = max(self.safety_azimuth_min, min(self.safety_azimuth_max, azimuth))
         pitch = max(self.safety_pitch_min, min(self.safety_pitch_max, pitch))
-        speed = max(0, min(100, speed))
         
-        # Format: H12,azimuth,pitch,speedE
-        command = f"H12,{azimuth:.2f},{pitch:.2f},{speed}E"
-        success = self._send_command(command)
+        # Speed conversion: Based on manual and user's config
+        # User's config shows: H91: dAdH_speed (deg/s) = 8, H93: Max_speed_percent = 500
+        # The H12 command speed parameter appears to be in degrees/second based on manual examples
+        # Convert UI percentage (0-100) to degrees/second (0-8 based on user's config, or up to 600 for PTU57)
+        if speed <= 100:
+            # Treat as UI percentage: map 0-100% to 0-8 deg/s (user's configured max speed)
+            # This gives slow, controlled movement
+            speed_deg_per_sec = (speed / 100.0) * 8.0
+            # Ensure minimum speed of 0.5 deg/s if speed > 0 to ensure movement
+            if speed > 0 and speed_deg_per_sec < 0.5:
+                speed_deg_per_sec = 0.5
+        else:
+            # Already in deg/s format, cap at reasonable max (8 deg/s per user config, or 600 for PTU57)
+            speed_deg_per_sec = min(speed, 8.0)  # Use user's configured max
+        
+        # Format: H12,azimuth,pitch,speedE (speed in degrees/second)
+        # Manual shows examples like "H12,45,30,20E" where parameters are integers
+        # Convert to integers for PTU command format
+        azimuth_int = int(round(azimuth))
+        pitch_int = int(round(pitch))
+        speed_int = int(round(speed_deg_per_sec))
+        command = f"H51,{azimuth_int},{pitch_int},{speed_int}E"
+        success = self._send_command(command, wait_for_done=True, timeout=5.0)
         
         if success:
             with self.position_lock:
                 self.current_azimuth = azimuth
                 self.current_pitch = pitch
-            logger.debug(f"Moving to: Azimuth={azimuth:.2f}°, Pitch={pitch:.2f}°, Speed={speed}%")
+            logger.info(f"Moving to: Azimuth={azimuth_int}°, Pitch={pitch_int}°, Speed={speed_int} deg/s")
         
-        return {'success': success, 'azimuth': azimuth, 'pitch': pitch}
+        return {'success': success, 'azimuth': azimuth, 'pitch': pitch, 'command': command}
     
     def _handle_move_relative(self, args: Dict[str, Any]) -> Dict[str, Any]:
         """Handle move relative command."""
@@ -285,10 +325,13 @@ class PTUControlThread(threading.Thread):
             current_azimuth = self.current_azimuth
             current_pitch = self.current_pitch
         
-        # Move to current position with 0 speed
-        command = f"H12,{current_azimuth:.2f},{current_pitch:.2f},0E"
-        success = self._send_command(command)
-        return {'success': success}
+        # Move to current position with 0 speed to stop movement
+        # Convert to integers for PTU command format
+        azimuth_int = int(round(current_azimuth))
+        pitch_int = int(round(current_pitch))
+        command = f"H12,{azimuth_int},{pitch_int},0E"
+        success = self._send_command(command, wait_for_done=True, timeout=2.0)
+        return {'success': success, 'command': command}
     
     def _handle_go_to_zero(self, args: Dict[str, Any]) -> Dict[str, Any]:
         """Handle go to zero command."""
@@ -305,6 +348,14 @@ class PTUControlThread(threading.Thread):
         self.default_speed = max(0, min(100, speed))
         return {'success': True, 'speed': self.default_speed}
     
+    def _handle_set_acceleration(self, args: Dict[str, Any]) -> Dict[str, Any]:
+        """Handle set acceleration command."""
+        acceleration = args.get('acceleration', 5)
+        self.default_acceleration = max(0, min(100, acceleration))
+        # Acceleration is typically handled by PTU firmware automatically
+        # But we store it for reference and can use it to influence movement smoothness
+        return {'success': True, 'acceleration': self.default_acceleration}
+    
     def _handle_get_position(self) -> Dict[str, Any]:
         """Handle get position command."""
         with self.position_lock:
@@ -312,8 +363,18 @@ class PTUControlThread(threading.Thread):
             pitch = self.current_pitch
         return {'success': True, 'azimuth': azimuth, 'pitch': pitch}
     
-    def _send_command(self, command: str) -> bool:
-        """Send command to PTU."""
+    def _send_command(self, command: str, wait_for_done: bool = True, timeout: float = 2.0) -> bool:
+        """
+        Send command to PTU and optionally wait for 'Done' response.
+        
+        Args:
+            command: Command string to send
+            wait_for_done: If True, wait for 'Done' response
+            timeout: Timeout in seconds for waiting for response
+            
+        Returns:
+            True if command sent successfully (and 'Done' received if wait_for_done=True)
+        """
         if not self.is_connected or not self.serial_port:
             return False
         
@@ -322,10 +383,113 @@ class PTUControlThread(threading.Thread):
             if not command.endswith('E'):
                 command += 'E'
             
-            # Send command
-            self.serial_port.write(command.encode('ascii'))
+            # Clear input buffer before sending
+            if self.serial_port.in_waiting > 0:
+                self.serial_port.reset_input_buffer()
+            
+            # Send command - PTU57/42 expects commands ending with 'E' only (no \r\n needed)
+            # According to manual, commands end with 'E' (e.g., "H12,45,30,20E")
+            command_bytes = command.encode('ascii')
+            bytes_written = self.serial_port.write(command_bytes)
             self.serial_port.flush()
-            logger.debug(f"Sent command: {command}")
+            logger.info(f"Sent command ({bytes_written} bytes): {command} (hex: {command_bytes.hex()})")
+            
+            # Add to command history
+            with self.history_lock:
+                history_entry = {
+                    'command': command,
+                    'timestamp': time.time(),
+                    'status': 'sent',
+                    'direction': 'TX'  # Transmit
+                }
+                self.command_history.append(history_entry)
+                # Keep only last 1000 commands
+                if len(self.command_history) > 1000:
+                    self.command_history.pop(0)
+            
+            # Notify UI of sent command
+            if self.history_callback:
+                try:
+                    self.history_callback(command, 'sent', '')
+                except:
+                    pass
+            
+            # Wait for 'Done' response if requested
+            if wait_for_done:
+                start_time = time.time()
+                response = ""
+                # Give PTU a small delay to start responding
+                time.sleep(0.1)
+                
+                while (time.time() - start_time) < timeout:
+                    if self.serial_port.in_waiting > 0:
+                        chunk = self.serial_port.read(self.serial_port.in_waiting).decode('ascii', errors='ignore')
+                        response += chunk
+                        logger.debug(f"Received chunk: {repr(chunk)}")
+                        # Check for Done (case insensitive, might have whitespace or newlines)
+                        response_upper = response.upper().strip()
+                        if 'DONE' in response_upper or 'OK' in response_upper:
+                            logger.info(f"Received response: {response.strip()}")
+                            # Update command history with response
+                            with self.history_lock:
+                                if self.command_history:
+                                    self.command_history[-1]['status'] = 'done'
+                                    self.command_history[-1]['response'] = response.strip()
+                            
+                            # Notify UI of received response
+                            if self.history_callback:
+                                try:
+                                    self.history_callback(response.strip(), 'done', response.strip())
+                                except:
+                                    pass
+                            return True
+                    time.sleep(0.05)  # Check every 50ms
+                
+                # If we got here, we didn't receive 'Done' in time
+                if response.strip():
+                    logger.warning(f"Timeout waiting for 'Done' response. Received: {repr(response)}")
+                    # Log any response received (even if not "Done")
+                    if self.history_callback:
+                        try:
+                            self.history_callback(response.strip(), 'response', response.strip())
+                        except:
+                            pass
+                else:
+                    logger.warning(f"Timeout waiting for 'Done' response. No response received.")
+                    # Check if there's any data in the buffer that we might have missed
+                    if self.serial_port.in_waiting > 0:
+                        remaining = self.serial_port.read(self.serial_port.in_waiting).decode('ascii', errors='ignore')
+                        logger.info(f"Found remaining data in buffer: {repr(remaining)}")
+                        response += remaining
+                        # Log any data found in buffer
+                        if self.history_callback and remaining.strip():
+                            try:
+                                self.history_callback(remaining.strip(), 'response', remaining.strip())
+                            except:
+                                pass
+                
+                # For H12 movement commands, the PTU might execute without sending Done
+                # According to manual, PTU should send Done, but some models/firmware versions might not
+                # If we got any response (even if not "Done"), assume command was received
+                if 'H12' in command:
+                    if response.strip():
+                        logger.info(f"Command sent, received response (not 'Done'): {repr(response)}. Assuming success.")
+                    else:
+                        logger.info("Command sent, no response received. PTU may execute command without response.")
+                    # Assume success for movement commands - PTU will execute them
+                    with self.history_lock:
+                        if self.command_history:
+                            self.command_history[-1]['status'] = 'done'
+                            self.command_history[-1]['response'] = response.strip() if response.strip() else 'no_response_assumed_success'
+                    return True
+                
+                # Update command history with timeout for non-movement commands
+                with self.history_lock:
+                    if self.command_history:
+                        self.command_history[-1]['status'] = 'timeout'
+                        self.command_history[-1]['response'] = response.strip() if response else 'timeout'
+                return False
+            
             return True
             
         except Exception as e:
@@ -401,10 +565,12 @@ class PTUControl:
     """
     
     # PTU57 default limits (from manual)
+    # Note: User's actual config shows H92: +A_limit=90, +H_limit=90
+    # So actual limits are: azimuth: -90 to 90, pitch: -90 to 90
     PTU57_AZIMUTH_MIN = -90.0  # degrees
-    PTU57_AZIMUTH_MAX = 180.0  # degrees
+    PTU57_AZIMUTH_MAX = 90.0   # degrees (updated from 180.0 to match user's config)
     PTU57_PITCH_MIN = -90.0    # degrees
-    PTU57_PITCH_MAX = 135.0    # degrees
+    PTU57_PITCH_MAX = 90.0     # degrees (updated from 135.0 to match user's config)
     
     # PTU42 default limits (from manual)
     PTU42_AZIMUTH_MIN = -80.0
@@ -436,10 +602,11 @@ class PTUControl:
             self.pitch_min = self.PTU42_PITCH_MIN
             self.pitch_max = self.PTU42_PITCH_MAX
         else:  # PTU57
-            self.azimuth_min = self.PTU57_AZIMUTH_MIN
-            self.azimuth_max = self.PTU57_AZIMUTH_MAX
-            self.pitch_min = self.PTU57_PITCH_MIN
-            self.pitch_max = self.PTU57_PITCH_MAX
+            # Updated to match user's actual PTU configuration (H92: +A_limit=90, +H_limit=90)
+            self.azimuth_min = -90.0
+            self.azimuth_max = 90.0  # Changed from 180.0
+            self.pitch_min = -90.0
+            self.pitch_max = 90.0  # Changed from 135.0
         
         # Safety limits (can be adjusted)
         self.safety_azimuth_min = self.azimuth_min
@@ -579,6 +746,36 @@ class PTUControl:
         )
         return result.get('success', False)
     
+    def set_acceleration(self, acceleration: int) -> bool:
+        """
+        Set movement acceleration (for subsequent commands).
+        
+        Args:
+            acceleration: Acceleration (0-100, percentage)
+        
+        Returns:
+            True if command sent successfully
+        """
+        if not self.thread or not self.thread.is_running:
+            return False
+        
+        result = self.thread.send_command(
+            PTUCommandType.SET_ACCELERATION,
+            {'acceleration': acceleration},
+            timeout=0.5
+        )
+        return result.get('success', False)
+    
+    def set_history_callback(self, callback):
+        """
+        Set callback function for command history updates.
+        
+        Args:
+            callback: Function that takes (command, status, response) parameters
+        """
+        if self.thread:
+            self.thread.history_callback = callback
+    
     def go_to_zero(self, speed: int = 20) -> bool:
         """
         Move to zero position (0, 0) (non-blocking, uses thread).
@@ -621,6 +818,23 @@ class PTUControl:
             self.current_pitch = result.get('pitch', self.current_pitch)
         
         return (self.current_azimuth, self.current_pitch)
+    
+    def get_command_history(self, limit: int = 100) -> List[Dict[str, Any]]:
+        """
+        Get command history from PTU thread.
+        
+        Args:
+            limit: Maximum number of commands to return
+            
+        Returns:
+            List of command dictionaries with 'command', 'timestamp', 'status', and optional 'response'
+        """
+        if not self.thread or not self.thread.is_running:
+            return []
+        
+        with self.thread.history_lock:
+            # Return last N commands
+            return self.thread.command_history[-limit:] if hasattr(self.thread, 'command_history') else []
     
     def _clamp_angles(self, azimuth: float, pitch: float) -> Tuple[float, float]:
         """

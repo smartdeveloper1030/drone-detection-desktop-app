@@ -191,6 +191,13 @@ class DroneDetectionApp:
         ptu_view.set_acceleration.connect(self._on_ptu_set_acceleration)
         ptu_view.tracking_enabled_changed.connect(self.enable_ptu_tracking)
         
+        # Set up command history callback to show all communication in UI
+        def history_callback(command, status, response):
+            """Callback to update UI with command history."""
+            ptu_view.add_command_history(command, status, response)
+        
+        self.ptu.set_history_callback(history_callback)
+        
         # Processing state
         self.is_running = False
         self.frame_timer = QTimer()
@@ -406,7 +413,14 @@ class DroneDetectionApp:
             # Read frame
             ret, frame = self.camera.read_frame()
             if not ret or frame is None:
-                logger.warning("Failed to read frame")
+                # Video has ended or failed to read
+                if not self.camera.is_running:
+                    logger.info("Video playback ended. Stopping frame processing.")
+                    self.is_running = False
+                    self.frame_timer.stop()
+                    self.main_window.get_system_view().add_alert("Video playback ended", "INFO")
+                else:
+                    logger.warning("Failed to read frame")
                 self.main_window.get_system_view().update_camera_status(False)
                 return
         except Exception as e:
@@ -665,9 +679,8 @@ class DroneDetectionApp:
     
     def _on_ptu_set_acceleration(self, acceleration: int):
         """Handle PTU acceleration setting."""
-        # Acceleration is typically handled by the PTU firmware
-        # This is a placeholder for future implementation
-        pass
+        if self.ptu.is_connected:
+            self.ptu.set_acceleration(acceleration)
     
     def _move_ptu_to_point(self, point: Tuple[float, float]):
         """

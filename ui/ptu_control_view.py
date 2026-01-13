@@ -282,72 +282,15 @@ class PTUControlView(QWidget):
         return panel
     
     def create_programming_panel(self) -> QGroupBox:
-        """Create the right programming panel."""
-        panel = QGroupBox("Programming")
+        """Create the right command history panel."""
+        panel = QGroupBox("Command History")
         layout = QVBoxLayout()
         
-        # Programming editor
-        self.program_editor = QTextEdit()
-        self.program_editor.setPlaceholderText(
-            "loop(0)\nH51,45,30,20E\nloop(2)\nH12,-30,25,25E\nH12,30,25,25E\n..."
-        )
-        self.program_editor.setStyleSheet("""
-            QTextEdit {
-                background-color: #1e1e1e;
-                color: #00ff00;
-                font-family: 'Courier New', monospace;
-                font-size: 11px;
-            }
-        """)
-        layout.addWidget(self.program_editor)
-        
-        # Program control buttons
-        program_buttons_layout = QHBoxLayout()
-        
-        run_btn = QPushButton("Run")
-        run_btn.clicked.connect(self._on_program_run)
-        program_buttons_layout.addWidget(run_btn)
-        
-        stop_btn = QPushButton("Stop")
-        stop_btn.clicked.connect(self._on_program_stop)
-        program_buttons_layout.addWidget(stop_btn)
-        
-        keep_btn = QPushButton("Keep")
-        keep_btn.clicked.connect(self._on_program_keep)
-        program_buttons_layout.addWidget(keep_btn)
-        
-        open_btn = QPushButton("Open")
-        open_btn.clicked.connect(self._on_program_open)
-        program_buttons_layout.addWidget(open_btn)
-        
-        layout.addLayout(program_buttons_layout)
-        
-        # Additional control buttons
-        additional_buttons_layout = QHBoxLayout()
-        
-        take_over_btn = QPushButton("Take Over")
-        take_over_btn.clicked.connect(self._on_take_over)
-        additional_buttons_layout.addWidget(take_over_btn)
-        
-        clear_btn = QPushButton("Clear")
-        clear_btn.clicked.connect(self._on_program_clear)
-        additional_buttons_layout.addWidget(clear_btn)
-        
-        illustrate_btn = QPushButton("Illustrate")
-        illustrate_btn.clicked.connect(self._on_illustrate)
-        additional_buttons_layout.addWidget(illustrate_btn)
-        
-        setup_btn = QPushButton("Setup")
-        setup_btn.clicked.connect(self._on_setup)
-        additional_buttons_layout.addWidget(setup_btn)
-        
-        layout.addLayout(additional_buttons_layout)
-        
-        # Output/Log area
-        self.output_text = QTextEdit()
-        self.output_text.setReadOnly(True)
-        self.output_text.setPlaceholderText("Output/Log messages will appear here...")
-        self.output_text.setStyleSheet("""
+        # Command history display
+        self.command_history_text = QTextEdit()
+        self.command_history_text.setReadOnly(True)
+        self.command_history_text.setPlaceholderText("Command history will appear here...")
+        self.command_history_text.setStyleSheet("""
             QTextEdit {
                 background-color: #1e1e1e;
                 color: #00ff00;
@@ -355,7 +298,18 @@ class PTUControlView(QWidget):
                 font-size: 10px;
             }
         """)
-        layout.addWidget(self.output_text)
+        layout.addWidget(self.command_history_text)
+        
+        # Control buttons
+        buttons_layout = QHBoxLayout()
+        
+        clear_history_btn = QPushButton("Clear History")
+        clear_history_btn.clicked.connect(self._on_clear_history)
+        buttons_layout.addWidget(clear_history_btn)
+        
+        buttons_layout.addStretch()
+        
+        layout.addLayout(buttons_layout)
         
         panel.setLayout(layout)
         return panel
@@ -561,8 +515,38 @@ class PTUControlView(QWidget):
         self.pitch_input.setValue(pitch)
     
     def add_output(self, message: str):
-        """Add message to output area."""
-        self.output_text.append(message)
+        """Add message to output area (deprecated - use add_command_history instead)."""
+        # This method is kept for backward compatibility but now adds to command history
+        self.add_command_history(message)
+    
+    def add_command_history(self, command: str, status: str = "sent", response: str = ""):
+        """
+        Add command to history display.
+        
+        Args:
+            command: Command string that was sent
+            status: Status of command ('sent', 'done', 'timeout', 'error')
+            response: Response from PTU (if any)
+        """
+        from datetime import datetime
+        timestamp = datetime.now().strftime("%H:%M:%S.%f")[:-3]  # HH:MM:SS.mmm
+        
+        # Format the history entry
+        if status == "done" and response:
+            entry = f"[{timestamp}] {command} -> {response}"
+        elif status == "timeout":
+            entry = f"[{timestamp}] {command} -> TIMEOUT"
+        elif status == "error":
+            entry = f"[{timestamp}] {command} -> ERROR: {response}"
+        else:
+            entry = f"[{timestamp}] {command}"
+        
+        self.command_history_text.append(entry)
+        
         # Auto-scroll to bottom
-        scrollbar = self.output_text.verticalScrollBar()
+        scrollbar = self.command_history_text.verticalScrollBar()
         scrollbar.setValue(scrollbar.maximum())
+    
+    def _on_clear_history(self):
+        """Clear command history display."""
+        self.command_history_text.clear()
