@@ -7,6 +7,7 @@ import serial.tools.list_ports
 import time
 import logging
 import threading
+import re
 from queue import Queue, Empty
 from typing import Optional, Tuple, List, Dict, Any
 from enum import Enum
@@ -19,7 +20,7 @@ PTU_AZIMUTH_MIN = -120.0  # degrees (PAN_MIN)
 PTU_AZIMUTH_MAX = 85.0    # degrees (PAN_MAX)
 PTU_PITCH_MIN = -80.0     # degrees (TILT_MIN)
 PTU_PITCH_MAX = 85.0      # degrees (TILT_MAX)
-
+PULSE_TO_DEGREE = 0.0009375
 
 class PTUCommandType(Enum):
     """Command types for PTU thread communication."""
@@ -375,11 +376,157 @@ class PTUControlThread(threading.Thread):
         return {'success': True, 'acceleration': self.default_acceleration}
     
     def _handle_get_position(self) -> Dict[str, Any]:
-        """Handle get position command."""
-        with self.position_lock:
-            azimuth = self.current_azimuth
-            pitch = self.current_pitch
-        return {'success': True, 'azimuth': azimuth, 'pitch': pitch}
+        """Handle get position command using H10 (azimuth/A1) and H20 (pitch/A2)."""
+        if not self.is_connected:
+            return {'success': False, 'error': 'PTU not connected'}
+        
+        try:
+            # Send H10E to get azimuth position (A1)
+            azimuth_response = self._send_command_with_response("H10E", timeout=2.0)
+            if not azimuth_response:
+                logger.warning("Failed to get azimuth position from H10 command")
+                azimuth = self.current_azimuth  # Use cached value on failure
+            else:
+                azimuth = self._parse_position_response(azimuth_response, "azimuth")
+            
+            # Send H20E to get pitch position (A2)
+            pitch_response = self._send_command_with_response("H20E", timeout=2.0)
+            if not pitch_response:
+                logger.warning("Failed to get pitch position from H20 command")
+                pitch = self.current_pitch  # Use cached value on failure
+            else:
+                pitch = self._parse_position_response(pitch_response, "pitch")
+            
+            # Update cached position
+            with self.position_lock:
+                self.current_azimuth = azimuth
+                self.current_pitch = pitch
+            
+            logger.info(f"Position retrieved: Azimuth={azimuth:.2f}°, Pitch={pitch:.2f}°")
+            return {'success': True, 'azimuth': azimuth, 'pitch': pitch}
+            
+        except Exception as e:
+            logger.error(f"Error getting position: {str(e)}")
+            # Return cached values on error
+            with self.position_lock:
+                return {'success': False, 'error': str(e), 
+                       'azimuth': self.current_azimuth, 'pitch': self.current_pitch}
+    
+    def _send_command_with_response(self, command: str, timeout: float = 2.0) -> Optional[str]:
+        """
+        Send command to PTU and return the response string (not just Done/OK).
+        
+        Args:
+            command: Command string to send (e.g., "H10E")
+            timeout: Timeout in seconds
+            
+        Returns:
+            Response string from PTU, or None on failure
+        """
+        if not self.is_connected or not self.serial_port:
+            return None
+        
+        try:
+            # Ensure command ends with 'E'
+            if not command.endswith('E'):
+                command += 'E'
+            
+            # Clear input buffer before sending
+            if self.serial_port.in_waiting > 0:
+                self.serial_port.reset_input_buffer()
+            
+            # Send command
+            command_bytes = command.encode('ascii')
+            bytes_written = self.serial_port.write(command_bytes)
+            self.serial_port.flush()
+            logger.debug(f"Sent command ({bytes_written} bytes): {command}")
+            
+            # Wait for response
+            start_time = time.time()
+            response = ""
+            time.sleep(0.1)  # Give PTU time to respond
+            
+            while (time.time() - start_time) < timeout:
+                if self.serial_port.in_waiting > 0:
+                    chunk = self.serial_port.read(self.serial_port.in_waiting).decode('ascii', errors='ignore')
+                    response += chunk
+                    logger.debug(f"Received chunk: {repr(chunk)}")
+                    
+                    # H10 and H20 typically return position values, not "Done"
+                    # Response might be: "45" or "45\r\n" or "45 Done" etc.
+                    # Try to extract numeric value
+                    if response.strip():
+                        # Give a bit more time for complete response
+                        time.sleep(0.05)
+                        # Check if more data is coming
+                        if self.serial_port.in_waiting == 0:
+                            break
+                else:
+                    time.sleep(0.05)  # Check every 50ms
+            
+            # Read any remaining data
+            if self.serial_port.in_waiting > 0:
+                remaining = self.serial_port.read(self.serial_port.in_waiting).decode('ascii', errors='ignore')
+                response += remaining
+                logger.debug(f"Received remaining: {repr(remaining)}")
+            
+            if response.strip():
+                logger.debug(f"Full response for {command}: {repr(response)}")
+                return response.strip()
+            else:
+                logger.warning(f"No response received for command {command}")
+                return None
+                
+        except Exception as e:
+            logger.error(f"Error sending command {command}: {str(e)}")
+            return None
+    
+    def _parse_position_response(self, response: str, position_type: str) -> float:
+        """
+        Parse position value from PTU response (H10 or H20).
+        PTU returns pulse values that need to be converted to degrees.
+        
+        Args:
+            response: Response string from PTU (contains pulse value)
+            position_type: "azimuth" or "pitch" (for logging)
+            
+        Returns:
+            Position value in degrees (float) - converted from pulses
+        """
+        try:
+            # Clean the response - remove "Done", "OK", whitespace, newlines
+            cleaned = response.strip()
+            
+            # Remove common response words
+            for word in ['Done', 'DONE', 'done', 'OK', 'ok', '\r', '\n']:
+                cleaned = cleaned.replace(word, ' ')
+            
+            # Extract first numeric value (this is the pulse value)
+            match = re.search(r'-?\d+\.?\d*', cleaned)
+            if match:
+                pulse_value = float(match.group())
+                
+                # Convert pulse to degrees using PULSE_TO_DEGREE constant
+                angle_degrees = pulse_value * PULSE_TO_DEGREE
+                
+                logger.debug(f"Parsed {position_type} from response '{response}': "
+                           f"pulse={pulse_value} -> angle={angle_degrees:.4f}°")
+                return angle_degrees
+            else:
+                logger.warning(f"Could not parse {position_type} from response: {repr(response)}")
+                # Return cached value on parse failure
+                if position_type == "azimuth":
+                    return self.current_azimuth
+                else:
+                    return self.current_pitch
+                    
+        except Exception as e:
+            logger.error(f"Error parsing {position_type} from response '{response}': {str(e)}")
+            # Return cached value on error
+            if position_type == "azimuth":
+                return self.current_azimuth
+            else:
+                return self.current_pitch
     
     def _handle_send_raw_command(self, args: Dict[str, Any]) -> Dict[str, Any]:
         """Handle raw command sending without waiting for Done response."""
