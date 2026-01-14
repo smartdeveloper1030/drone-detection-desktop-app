@@ -624,12 +624,10 @@ class DroneDetectionApp:
         
         if success:
             self.main_window.get_ptu_control_view().update_connection_status(True, port)
+            self.main_window.get_ptu_control_view().update_position(0.0, 0.0)  # Reset position to zero
             self.main_window.get_system_view().add_alert(
                 f"PTU connected on {port}", "INFO"
             )
-            # Update position display
-            azimuth, pitch = self.ptu.get_position()
-            self.main_window.get_ptu_control_view().update_position(azimuth, pitch)
         else:
             self.main_window.get_ptu_control_view().update_connection_status(False)
             self.main_window.get_system_view().add_alert(

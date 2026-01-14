@@ -190,13 +190,13 @@ class PTUControlThread(threading.Thread):
             
             self.is_connected = True
             
-            # Move to zero position
-            logger.info("Moving to zero position...")
-            try:
-                self._send_command(f"H51,0,0,{MAX_SPEED}E", wait_for_done=False)
-                time.sleep(1.0)
-            except Exception as e:
-                logger.warning(f"Move to zero failed: {e}")
+            # # Move to zero position
+            # logger.info("Moving to zero position...")
+            # try:
+            #     self._send_command(f"H51,0,0,{MAX_SPEED}E", wait_for_done=False)
+            #     time.sleep(1.0)
+            # except Exception as e:
+            #     logger.warning(f"Move to zero failed: {e}")
             
             logger.info(f"PTU connected successfully on {port}")
             return {'success': True}
@@ -256,27 +256,10 @@ class PTUControlThread(threading.Thread):
         azimuth = max(self.safety_azimuth_min, min(self.safety_azimuth_max, azimuth))
         pitch = max(self.safety_pitch_min, min(self.safety_pitch_max, pitch))
         
-        # Speed conversion: Based on manual and user's config
-        # User's config shows: H91: dAdH_speed (deg/s) = 8, H93: Max_speed_percent = 500
-        # The H12 command speed parameter appears to be in degrees/second based on manual examples
-        # Convert UI percentage (0-100) to degrees/second (0-8 based on user's config)
-        if speed <= 100:
-            # Treat as UI percentage: map 0-100% to 0-8 deg/s (user's configured max speed)
-            # This gives slow, controlled movement
-            speed_deg_per_sec = (speed / 100.0) * 8.0
-            # Ensure minimum speed of 0.5 deg/s if speed > 0 to ensure movement
-            if speed > 0 and speed_deg_per_sec < 0.5:
-                speed_deg_per_sec = 0.5
-        else:
-            # Already in deg/s format, cap at reasonable max (8 deg/s per user config)
-            speed_deg_per_sec = min(speed, 8.0)  # Use user's configured max
-        
-        # Format: H12,azimuth,pitch,speedE (speed in degrees/second)
-        # Manual shows examples like "H12,45,30,20E" where parameters are integers
         # Convert to integers for PTU command format
         azimuth_int = int(round(azimuth))
         pitch_int = int(round(pitch))
-        speed_int = int(round(speed_deg_per_sec))
+        speed_int = int(round(speed))
         command = f"H51,{azimuth_int},{pitch_int},{speed_int}E"
         success = self._send_command(command, wait_for_done=True, timeout=5.0)
         
@@ -289,7 +272,7 @@ class PTUControlThread(threading.Thread):
         return {'success': success, 'azimuth': azimuth, 'pitch': pitch, 'command': command}
     
     def _handle_move_relative(self, args: Dict[str, Any]) -> Dict[str, Any]:
-        """Handle move relative command."""
+        """Handle move relative command using H52."""
         if not self.is_connected:
             return {'success': False, 'error': 'PTU not connected'}
         
@@ -301,14 +284,36 @@ class PTUControlThread(threading.Thread):
         delta_pitch = args['delta_pitch']
         speed = args.get('speed', self.default_speed)
         
+        # Calculate expected new position for safety limit checking
         new_azimuth = current_azimuth + delta_azimuth
         new_pitch = current_pitch + delta_pitch
         
-        return self._handle_move_to_position({
-            'azimuth': new_azimuth,
-            'pitch': new_pitch,
-            'speed': speed
-        })
+        # Clamp expected position to safety limits
+        new_azimuth = max(self.safety_azimuth_min, min(self.safety_azimuth_max, new_azimuth))
+        new_pitch = max(self.safety_pitch_min, min(self.safety_pitch_max, new_pitch))
+        
+        # Calculate actual delta after clamping (if position was clamped, adjust delta)
+        actual_delta_azimuth = new_azimuth - current_azimuth
+        actual_delta_pitch = new_pitch - current_pitch
+        
+        # Convert to integers for PTU command format (H52 expects integer values)
+        delta_azimuth_int = int(round(actual_delta_azimuth))
+        delta_pitch_int = int(round(actual_delta_pitch))
+        speed_int = int(round(speed))
+        
+        # Send H52 command: H52,delta_azimuth,delta_pitch,speedE
+        command = f"H52,{delta_azimuth_int},{delta_pitch_int},{speed_int}E"
+        success = self._send_command(command, wait_for_done=True, timeout=5.0)
+        
+        if success:
+            # Update cached position to the clamped position
+            with self.position_lock:
+                self.current_azimuth = new_azimuth
+                self.current_pitch = new_pitch
+            logger.info(f"Moving relative: Delta Azimuth={delta_azimuth_int}°, Delta Pitch={delta_pitch_int}°, Speed={speed_int}, New Position=({new_azimuth:.2f}°, {new_pitch:.2f}°)")
+        
+        return {'success': success, 'delta_azimuth': actual_delta_azimuth, 'delta_pitch': actual_delta_pitch, 
+                'azimuth': new_azimuth, 'pitch': new_pitch, 'command': command}
     
     def _handle_move_directional(self, args: Dict[str, Any]) -> Dict[str, Any]:
         """Handle directional movement command (H61/H62/H63/H64)."""
@@ -520,6 +525,78 @@ class PTUControlThread(threading.Thread):
             else:
                 return self.current_pitch
     
+    def _validate_and_clamp_absolute_position_values(self, command: str) -> str:
+        """
+        Validate and clamp A1 (azimuth) and A2 (pitch) values in PTU commands to safety limits.
+        
+        Args:
+            command: Command string (e.g., "H51,45,30,20E")
+            
+        Returns:
+            Command string with clamped position values (if applicable)
+        """
+        # Remove trailing 'E' if present for parsing
+        original_command = command
+        has_trailing_e = command.endswith('E')
+        if has_trailing_e:
+            command = command[:-1]
+        
+        # Check if this is a position command (H51, etc.)
+        # Format: H51,A1,A2,speed 
+        # Where A1 = azimuth, A2 = pitch
+        position_command_pattern = r'^(H51),(-?\d+\.?\d*),(-?\d+\.?\d*),(-?\d+\.?\d*)$'
+        match = re.match(position_command_pattern, command)
+        
+        if match:
+            cmd_type = match.group(1)  # H51 or H12
+            a1_str = match.group(2)  # Azimuth (A1)
+            a2_str = match.group(3)  # Pitch (A2)
+            speed_str = match.group(4)
+            
+            try:
+                # Parse values
+                a1 = float(a1_str)  # Azimuth
+                a2 = float(a2_str)  # Pitch
+                speed = float(speed_str)
+                
+                # Clamp A1 (azimuth) to safety limits
+                a1_clamped = max(self.safety_azimuth_min, min(self.safety_azimuth_max, a1))
+                
+                # Clamp A2 (pitch) to safety limits
+                a2_clamped = max(self.safety_pitch_min, min(self.safety_pitch_max, a2))
+                
+                # Check if values were clamped
+                if a1 != a1_clamped:
+                    logger.warning(
+                        f"A1 (azimuth) value clamped: {a1}° -> {a1_clamped}° "
+                        f"(limit: {self.safety_azimuth_min}° to {self.safety_azimuth_max}°)"
+                    )
+                
+                if a2 != a2_clamped:
+                    logger.warning(
+                        f"A2 (pitch) value clamped: {a2}° -> {a2_clamped}° "
+                        f"(limit: {self.safety_pitch_min}° to {self.safety_pitch_max}°)"
+                    )
+                
+                # Reconstruct command with clamped values (as integers)
+                a1_int = int(round(a1_clamped))
+                a2_int = int(round(a2_clamped))
+                speed_int = int(round(speed))
+                
+                validated_command = f"{cmd_type},{a1_int},{a2_int},{speed_int}"
+                if has_trailing_e:
+                    validated_command += 'E'
+                
+                return validated_command
+                
+            except ValueError as e:
+                logger.error(f"Error parsing command values: {e}")
+                # Return original command if parsing fails
+                return original_command
+        else:
+            # Not a position command, return as-is
+            return original_command
+    
     def _handle_send_raw_command(self, args: Dict[str, Any]) -> Dict[str, Any]:
         """Handle raw command sending without waiting for Done response."""
         if not self.is_connected:
@@ -552,6 +629,17 @@ class PTUControlThread(threading.Thread):
             # Ensure command ends with 'E'
             if not command.endswith('E'):
                 command += 'E'
+            
+            # Validate and clamp A1 (azimuth) and A2 (pitch) values to safety limits
+            original_command = command
+            command = self._validate_and_clamp_absolute_position_values(command)
+            
+            # Log if command was modified
+            if command != original_command:
+                logger.warning(
+                    f"Command position values clamped to safety limits: "
+                    f"{original_command} -> {command}"
+                )
             
             # Clear input buffer before sending
             if self.serial_port.in_waiting > 0:
