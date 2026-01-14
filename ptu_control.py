@@ -21,6 +21,7 @@ PTU_AZIMUTH_MAX = 85.0    # degrees (PAN_MAX)
 PTU_PITCH_MIN = -80.0     # degrees (TILT_MIN)
 PTU_PITCH_MAX = 85.0      # degrees (TILT_MAX)
 PULSE_TO_DEGREE = 0.0009375
+MAX_SPEED = 450
 
 class PTUCommandType(Enum):
     """Command types for PTU thread communication."""
@@ -192,12 +193,7 @@ class PTUControlThread(threading.Thread):
             # Move to zero position
             logger.info("Moving to zero position...")
             try:
-                # Convert default_speed (percentage) to deg/s, then to integer
-                speed_deg_per_sec = (self.default_speed / 100.0) * 8.0
-                if speed_deg_per_sec < 0.5:
-                    speed_deg_per_sec = 0.5
-                speed_int = int(round(speed_deg_per_sec))
-                self._send_command(f"H51,0,0,{speed_int}E", wait_for_done=False)
+                self._send_command(f"H51,0,0,{MAX_SPEED}E", wait_for_done=False)
                 time.sleep(1.0)
             except Exception as e:
                 logger.warning(f"Move to zero failed: {e}")
@@ -231,11 +227,7 @@ class PTUControlThread(threading.Thread):
         
         try:
             # Move to safe position before disconnecting
-            speed_deg_per_sec = (self.default_speed / 100.0) * 8.0
-            if speed_deg_per_sec < 0.5:
-                speed_deg_per_sec = 0.5
-            speed_int = int(round(speed_deg_per_sec))
-            self._send_command(f"H51,0,0,{speed_int}E", wait_for_done=False)
+            self._send_command(f"H51,0,0,{MAX_SPEED}E", wait_for_done=False)
             time.sleep(0.5)
         except:
             pass
