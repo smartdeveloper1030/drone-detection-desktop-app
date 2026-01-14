@@ -163,7 +163,7 @@ class DroneDetectionApp:
         self.tracker = Tracker(max_age=5, min_hits=1, iou_threshold=0.3)
         
         # PTU control
-        self.ptu = PTUControl(model="PTU42")
+        self.ptu = PTUControl()
         self.coordinate_converter = None  # Will be initialized after camera connection
         self.ptu_tracking_enabled = False
         

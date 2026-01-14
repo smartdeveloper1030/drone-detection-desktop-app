@@ -1,6 +1,6 @@
 """
-PTU57/42 Gimbal Control Module
-Handles serial communication with PTU57/42 gimbal and safety limits.
+PTU Gimbal Control Module
+Handles serial communication with PTU gimbal and safety limits.
 """
 import serial
 import serial.tools.list_ports
@@ -12,6 +12,13 @@ from typing import Optional, Tuple, List, Dict, Any
 from enum import Enum
 
 logger = logging.getLogger(__name__)
+
+
+# PTU limit constants - single source of truth (DRY principle)
+PTU_AZIMUTH_MIN = -120.0  # degrees (PAN_MIN)
+PTU_AZIMUTH_MAX = 85.0    # degrees (PAN_MAX)
+PTU_PITCH_MIN = -80.0     # degrees (TILT_MIN)
+PTU_PITCH_MAX = 85.0      # degrees (TILT_MAX)
 
 
 class PTUCommandType(Enum):
@@ -36,15 +43,11 @@ class PTUControlThread(threading.Thread):
     Prevents UI blocking during serial operations.
     """
     
-    def __init__(self, model: str = "PTU42"):
+    def __init__(self):
         """
         Initialize PTU control thread.
-        
-        Args:
-            model: PTU model ("PTU57" or "PTU42")
         """
         super().__init__(daemon=True)
-        self.model = model.upper()
         self.serial_port: Optional[serial.Serial] = None
         self.is_connected = False
         self.is_running = False
@@ -62,20 +65,12 @@ class PTUControlThread(threading.Thread):
         # Callback for updating UI command history (set from main thread)
         self.history_callback = None
         
-        # Set limits based on model
+        # Set limits (using module-level constants - DRY)
         # Note: These can be overridden by actual PTU configuration (H92 settings)
-        if self.model == "PTU42":
-            self.azimuth_min = -80.0
-            self.azimuth_max = 180.0
-            self.pitch_min = -90.0
-            self.pitch_max = 120.0
-        else:  # PTU57
-            # Default PTU57 limits, but user's config shows: +A_limit=90, +H_limit=90
-            # So actual limits are: azimuth: -90 to 90, pitch: -90 to 90
-            self.azimuth_min = -90.0
-            self.azimuth_max = 90.0  # Changed from 180.0 to match user's H92 config
-            self.pitch_min = -90.0
-            self.pitch_max = 90.0  # Changed from 135.0 to match user's H92 config
+        self.azimuth_min = PTU_AZIMUTH_MIN
+        self.azimuth_max = PTU_AZIMUTH_MAX
+        self.pitch_min = PTU_PITCH_MIN
+        self.pitch_max = PTU_PITCH_MAX
         
         # Safety limits
         self.safety_azimuth_min = self.azimuth_min
@@ -189,7 +184,7 @@ class PTUControlThread(threading.Thread):
             if self.serial_port.in_waiting > 0:
                 self.serial_port.reset_input_buffer()
             
-            logger.info(f"Using software safety limits for {self.model} (no hardware changes).")
+            logger.info("Using software safety limits (no hardware changes).")
             
             self.is_connected = True
             
@@ -201,12 +196,12 @@ class PTUControlThread(threading.Thread):
                 if speed_deg_per_sec < 0.5:
                     speed_deg_per_sec = 0.5
                 speed_int = int(round(speed_deg_per_sec))
-                self._send_command(f"H12,0,0,{speed_int}E", wait_for_done=False)
+                self._send_command(f"H51,0,0,{speed_int}E", wait_for_done=False)
                 time.sleep(1.0)
             except Exception as e:
                 logger.warning(f"Move to zero failed: {e}")
             
-            logger.info(f"PTU {self.model} connected successfully on {port}")
+            logger.info(f"PTU connected successfully on {port}")
             return {'success': True}
             
         except serial.SerialException as e:
@@ -239,7 +234,7 @@ class PTUControlThread(threading.Thread):
             if speed_deg_per_sec < 0.5:
                 speed_deg_per_sec = 0.5
             speed_int = int(round(speed_deg_per_sec))
-            self._send_command(f"H12,0,0,{speed_int}E", wait_for_done=False)
+            self._send_command(f"H51,0,0,{speed_int}E", wait_for_done=False)
             time.sleep(0.5)
         except:
             pass
@@ -271,7 +266,7 @@ class PTUControlThread(threading.Thread):
         # Speed conversion: Based on manual and user's config
         # User's config shows: H91: dAdH_speed (deg/s) = 8, H93: Max_speed_percent = 500
         # The H12 command speed parameter appears to be in degrees/second based on manual examples
-        # Convert UI percentage (0-100) to degrees/second (0-8 based on user's config, or up to 600 for PTU57)
+        # Convert UI percentage (0-100) to degrees/second (0-8 based on user's config)
         if speed <= 100:
             # Treat as UI percentage: map 0-100% to 0-8 deg/s (user's configured max speed)
             # This gives slow, controlled movement
@@ -280,7 +275,7 @@ class PTUControlThread(threading.Thread):
             if speed > 0 and speed_deg_per_sec < 0.5:
                 speed_deg_per_sec = 0.5
         else:
-            # Already in deg/s format, cap at reasonable max (8 deg/s per user config, or 600 for PTU57)
+            # Already in deg/s format, cap at reasonable max (8 deg/s per user config)
             speed_deg_per_sec = min(speed, 8.0)  # Use user's configured max
         
         # Format: H12,azimuth,pitch,speedE (speed in degrees/second)
@@ -423,7 +418,7 @@ class PTUControlThread(threading.Thread):
             if self.serial_port.in_waiting > 0:
                 self.serial_port.reset_input_buffer()
             
-            # Send command - PTU57/42 expects commands ending with 'E' only (no \r\n needed)
+            # Send command - PTU expects commands ending with 'E' only (no \r\n needed)
             # According to manual, commands end with 'E' (e.g., "H12,45,30,20E")
             command_bytes = command.encode('ascii')
             bytes_written = self.serial_port.write(command_bytes)
@@ -588,61 +583,38 @@ class PTUControlThread(threading.Thread):
 
 class PTUControl:
     """
-    PTU57/42 Gimbal Control Class
+    PTU Gimbal Control Class
     
     Wrapper class that uses PTUControlThread for non-blocking serial communication.
     All serial operations are performed in a background thread to prevent UI blocking.
     
-    Based on PTU57/42 manual:
+    Based on PTU manual:
     - Default baud rate: 9600
     - Commands end with 'E' (e.g., "H12,45,30,20E")
     - Returns "Done" after each command
     - Safety limits must be set on connection
     """
     
-    # PTU57 default limits (from manual)
-    # Note: User's actual config shows H92: +A_limit=90, +H_limit=90
-    # So actual limits are: azimuth: -90 to 90, pitch: -90 to 90
-    PTU57_AZIMUTH_MIN = -90.0  # degrees
-    PTU57_AZIMUTH_MAX = 90.0   # degrees (updated from 180.0 to match user's config)
-    PTU57_PITCH_MIN = -90.0    # degrees
-    PTU57_PITCH_MAX = 90.0     # degrees (updated from 135.0 to match user's config)
+    # Note: Limit constants are now defined at module level (see top of file)
+    # This ensures DRY principle - single source of truth for all limit values
     
-    # PTU42 default limits (from manual)
-    PTU42_AZIMUTH_MIN = -80.0
-    PTU42_AZIMUTH_MAX = 180.0
-    PTU42_PITCH_MIN = -90.0
-    PTU42_PITCH_MAX = 120.0
-    
-    def __init__(self, model: str = "PTU42"):
+    def __init__(self):
         """
         Initialize PTU control.
-        
-        Args:
-            model: PTU model ("PTU57" or "PTU42")
         """
-        self.model = model.upper()
-        
         # Create and start the control thread
-        self.thread = PTUControlThread(model=self.model)
+        self.thread = PTUControlThread()
         self.thread.start()
         
         # Cached position (updated from thread responses)
         self.current_azimuth = 0.0
         self.current_pitch = 0.0
         
-        # Set limits based on model (for reference)
-        if self.model == "PTU42":
-            self.azimuth_min = self.PTU42_AZIMUTH_MIN
-            self.azimuth_max = self.PTU42_AZIMUTH_MAX
-            self.pitch_min = self.PTU42_PITCH_MIN
-            self.pitch_max = self.PTU42_PITCH_MAX
-        else:  # PTU57
-            # Updated to match user's actual PTU configuration (H92: +A_limit=90, +H_limit=90)
-            self.azimuth_min = -90.0
-            self.azimuth_max = 90.0  # Changed from 180.0
-            self.pitch_min = -90.0
-            self.pitch_max = 90.0  # Changed from 135.0
+        # Set limits (using module-level constants - DRY)
+        self.azimuth_min = PTU_AZIMUTH_MIN
+        self.azimuth_max = PTU_AZIMUTH_MAX
+        self.pitch_min = PTU_PITCH_MIN
+        self.pitch_max = PTU_PITCH_MAX
         
         # Safety limits (can be adjusted)
         self.safety_azimuth_min = self.azimuth_min
