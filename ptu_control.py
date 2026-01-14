@@ -16,10 +16,10 @@ logger = logging.getLogger(__name__)
 
 
 # PTU limit constants - single source of truth (DRY principle)
-PTU_AZIMUTH_MIN = -120.0  # degrees (PAN_MIN)
-PTU_AZIMUTH_MAX = 85.0    # degrees (PAN_MAX)
-PTU_PITCH_MIN = -80.0     # degrees (TILT_MIN)
-PTU_PITCH_MAX = 85.0      # degrees (TILT_MAX)
+PTU_AZIMUTH_MIN = -60.0  # degrees (PAN_MIN)
+PTU_AZIMUTH_MAX = 60.0    # degrees (PAN_MAX)
+PTU_PITCH_MIN = -45.0     # degrees (TILT_MIN)
+PTU_PITCH_MAX = 45.0      # degrees (TILT_MAX)
 PULSE_TO_DEGREE = 0.0009375
 MAX_SPEED = 450
 
@@ -529,8 +529,8 @@ class PTUControlThread(threading.Thread):
         if not command:
             return {'success': False, 'error': 'No command provided'}
         
-        # Send command without waiting for Done response
-        success = self._send_command(command, wait_for_done=False, timeout=0.0)
+        # Send command with waiting for Done response
+        success = self._send_command(command, wait_for_done=True, timeout=5.0)
         return {'success': success, 'command': command}
     
     def _send_command(self, command: str, wait_for_done: bool = True, timeout: float = 2.0) -> bool:
