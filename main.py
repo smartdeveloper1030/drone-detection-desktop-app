@@ -480,16 +480,16 @@ class DroneDetectionApp:
         
         # Calculate servo crosshair position (current PTU position in pixel coordinates)
         servo_crosshair = None
-        if self.ptu.is_connected and self.coordinate_converter:
-            current_azimuth, current_pitch = self.ptu.get_position()
-            servo_x, servo_y = self.coordinate_converter.angle_to_pixel(
-                current_azimuth, current_pitch, current_azimuth, current_pitch
-            )
-            servo_crosshair = (servo_x, servo_y)
+        # if self.ptu.is_connected and self.coordinate_converter:
+        #     current_azimuth, current_pitch = self.ptu.get_position()
+        #     servo_x, servo_y = self.coordinate_converter.angle_to_pixel(
+        #         current_azimuth, current_pitch, current_azimuth, current_pitch
+        #     )
+        #     servo_crosshair = (servo_x, servo_y)
             
-            # Move PTU to track predicted point if tracking is enabled
-            if self.ptu_tracking_enabled and predicted_point:
-                self._move_ptu_to_point(predicted_point)
+        #     # Move PTU to track predicted point if tracking is enabled
+        #     if self.ptu_tracking_enabled and predicted_point:
+        #         self._move_ptu_to_point(predicted_point)
         
         # Update operator view IMMEDIATELY with current frame and latest detections
         # This ensures smooth display regardless of detection speed
