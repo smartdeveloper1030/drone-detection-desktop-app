@@ -2,10 +2,11 @@
 Main window with side-by-side Operator View and System View.
 """
 from PyQt5.QtWidgets import (QMainWindow, QWidget, QHBoxLayout, QVBoxLayout, 
-                             QStatusBar, QComboBox, QLabel, QSplitter)
+                             QStatusBar, QComboBox, QLabel, QSplitter, QTabWidget)
 from PyQt5.QtCore import Qt, pyqtSignal
 from ui.operator_view import OperatorView
 from ui.system_view import SystemView
+from ui.ptu_control_view import PTUControlView
 from config import Config
 
 
@@ -112,25 +113,50 @@ class MainWindow(QMainWindow):
         
         main_layout.addLayout(toolbar_layout)
         
-        # Create splitter for side-by-side views
-        splitter = QSplitter(Qt.Horizontal)
+        # Create tab widget for main views
+        self.tab_widget = QTabWidget()
+        self.tab_widget.setStyleSheet("""
+            QTabWidget::pane {
+                border: 1px solid #555;
+                background-color: #2b2b2b;
+            }
+            QTabBar::tab {
+                background-color: #3b3b3b;
+                color: white;
+                padding: 8px 20px;
+                border: 1px solid #555;
+                border-bottom: none;
+                border-top-left-radius: 4px;
+                border-top-right-radius: 4px;
+            }
+            QTabBar::tab:selected {
+                background-color: #2b2b2b;
+                color: #00ff00;
+            }
+            QTabBar::tab:hover {
+                background-color: #444;
+            }
+        """)
+        
+        # Create splitter for side-by-side views (Detection tab)
+        detection_splitter = QSplitter(Qt.Horizontal)
         
         # Create views
         self.operator_view = OperatorView()
         self.system_view = SystemView()
         
         # Add views to splitter (left: operator, right: system)
-        splitter.addWidget(self.operator_view)
-        splitter.addWidget(self.system_view)
+        detection_splitter.addWidget(self.operator_view)
+        detection_splitter.addWidget(self.system_view)
         
         # Set splitter proportions (65% operator, 35% system)
-        splitter.setStretchFactor(0, 13)  # Operator view: 65% (13/20)
-        splitter.setStretchFactor(1, 7)   # System view: 35% (7/20)
+        detection_splitter.setStretchFactor(0, 13)  # Operator view: 65% (13/20)
+        detection_splitter.setStretchFactor(1, 7)   # System view: 35% (7/20)
         # Initial sizes: 65% and 35% of 1200px window width
-        splitter.setSizes([780, 420])     # 65% = 780px, 35% = 420px
+        detection_splitter.setSizes([780, 420])     # 65% = 780px, 35% = 420px
         
         # Set splitter style
-        splitter.setStyleSheet("""
+        detection_splitter.setStyleSheet("""
             QSplitter::handle {
                 background-color: #555;
                 width: 3px;
@@ -140,7 +166,14 @@ class MainWindow(QMainWindow):
             }
         """)
         
-        main_layout.addWidget(splitter)
+        # Create PTU control view
+        self.ptu_control_view = PTUControlView()
+        
+        # Add tabs
+        self.tab_widget.addTab(detection_splitter, "Detection")
+        self.tab_widget.addTab(self.ptu_control_view, "Servo Motor Control")
+        
+        main_layout.addWidget(self.tab_widget)
         
         # Set central widget
         self.setCentralWidget(central_widget)
@@ -211,4 +244,8 @@ class MainWindow(QMainWindow):
     def get_system_view(self) -> SystemView:
         """Get the system view."""
         return self.system_view
+    
+    def get_ptu_control_view(self) -> PTUControlView:
+        """Get the PTU control view."""
+        return self.ptu_control_view
 
