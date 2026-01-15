@@ -29,6 +29,7 @@ class PTUControlView(QWidget):
     set_acceleration = pyqtSignal(int)  # acceleration percentage
     tracking_enabled_changed = pyqtSignal(bool)  # enable/disable automatic tracking
     send_raw_command = pyqtSignal(str)  # raw command string
+    get_position_requested = pyqtSignal()  # request current position from PTU
     
     def __init__(self, parent=None):
         """Initialize the PTU control view."""
@@ -144,25 +145,39 @@ class PTUControlView(QWidget):
         layout = QGridLayout()
         layout.setSpacing(10)
         
-        # Pitch angle input (read-only)
+        # Pitch angle input (editable, integer only)
         pitch_label = QLabel("Pitch Angle:")
         pitch_label.setStyleSheet("color: white;")
         layout.addWidget(pitch_label, 0, 0)
         
-        self.pitch_input = QLineEdit()
-        self.pitch_input.setReadOnly(True)
-        self.pitch_input.setText("0.00°")
-        layout.addWidget(self.pitch_input, 0, 1, 1, 2)
+        self.pitch_input = QSpinBox()
+        self.pitch_input.setRange(-90, 90)  # Based on PTU limits
+        self.pitch_input.setValue(0)
+        self.pitch_input.setSuffix("°")
+        layout.addWidget(self.pitch_input, 0, 1)
         
-        # Azimuth angle input (read-only)
+        # Get Position button
+        get_position_btn = QPushButton("Get Position")
+        get_position_btn.clicked.connect(self._on_get_position)
+        get_position_btn.setToolTip("Get current position from PTU and update textboxes")
+        layout.addWidget(get_position_btn, 0, 2)
+        
+        # Azimuth angle input (editable, integer only)
         azimuth_label = QLabel("Azimuth:")
         azimuth_label.setStyleSheet("color: white;")
         layout.addWidget(azimuth_label, 1, 0)
         
-        self.azimuth_input = QLineEdit()
-        self.azimuth_input.setReadOnly(True)
-        self.azimuth_input.setText("0.00°")
-        layout.addWidget(self.azimuth_input, 1, 1, 1, 2)
+        self.azimuth_input = QSpinBox()
+        self.azimuth_input.setRange(-90, 90)  # Based on PTU limits
+        self.azimuth_input.setValue(0)
+        self.azimuth_input.setSuffix("°")
+        layout.addWidget(self.azimuth_input, 1, 1)
+        
+        # Move to Position button
+        move_to_position_btn = QPushButton("Move to Position")
+        move_to_position_btn.clicked.connect(self._on_move_to_position)
+        move_to_position_btn.setToolTip("Move PTU to the position specified in textboxes")
+        layout.addWidget(move_to_position_btn, 1, 2)
         
         # Speed slider
         speed_label = QLabel("Speed:")
@@ -200,17 +215,20 @@ class PTUControlView(QWidget):
         up_btn.clicked.connect(lambda: self._on_directional_move('up'))
         layout.addWidget(up_btn, 2, 1)
         
-        # Middle row
+        # Middle row - buttons with same width
         left_btn = QPushButton("← Left")
         left_btn.clicked.connect(lambda: self._on_directional_move('left'))
+        left_btn.setMinimumWidth(100)  # Set minimum width for consistency
         layout.addWidget(left_btn, 3, 0)
         
         pause_btn = QPushButton("Pause")
         pause_btn.clicked.connect(self._on_pause)
+        pause_btn.setMinimumWidth(100)  # Same width as Left and Right
         layout.addWidget(pause_btn, 3, 1)
         
         right_btn = QPushButton("Right →")
         right_btn.clicked.connect(lambda: self._on_directional_move('right'))
+        right_btn.setMinimumWidth(100)  # Same width as Left and Pause
         layout.addWidget(right_btn, 3, 2)
         
         # Bottom row
@@ -357,6 +375,25 @@ class PTUControlView(QWidget):
         """Handle pause button."""
         self.stop_requested.emit()
     
+    def _on_get_position(self):
+        """Handle get position button click."""
+        if self.is_connected:
+            self.get_position_requested.emit()
+        else:
+            self.add_command_history("Cannot get position: PTU not connected", "error")
+    
+    def _on_move_to_position(self):
+        """Handle move to position button click."""
+        if not self.is_connected:
+            self.add_command_history("Cannot move to position: PTU not connected", "error")
+            return
+        
+        # Get integer values from QSpinBox
+        azimuth = float(self.azimuth_input.value())
+        pitch = float(self.pitch_input.value())
+        
+        # Emit signal to move to position with current speed
+        self.move_to_position.emit(azimuth, pitch, self.current_speed)
     
     def _on_program_run(self):
         """Handle program run."""
@@ -434,8 +471,9 @@ class PTUControlView(QWidget):
         """Update current position display."""
         self.current_azimuth = azimuth
         self.current_pitch = pitch
-        self.azimuth_input.setText(f"{azimuth:.2f}°")
-        self.pitch_input.setText(f"{pitch:.2f}°")
+        # Set integer values (QSpinBox will round)
+        self.azimuth_input.setValue(int(round(azimuth)))
+        self.pitch_input.setValue(int(round(pitch)))
     
     def add_output(self, message: str):
         """Add message to output area (deprecated - use add_command_history instead)."""

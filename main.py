@@ -192,6 +192,7 @@ class DroneDetectionApp:
         ptu_view.set_acceleration.connect(self._on_ptu_set_acceleration)
         ptu_view.tracking_enabled_changed.connect(self.enable_ptu_tracking)
         ptu_view.send_raw_command.connect(self._on_ptu_send_raw_command)
+        ptu_view.get_position_requested.connect(self._on_ptu_get_position)
         
         # Set up command history callback to show all communication in UI
         def history_callback(command, status, response):
@@ -686,6 +687,19 @@ class DroneDetectionApp:
         """Handle PTU acceleration setting."""
         if self.ptu.is_connected:
             self.ptu.set_acceleration(acceleration)
+    
+    def _on_ptu_get_position(self):
+        """Handle PTU get position request."""
+        if self.ptu.is_connected:
+            azimuth, pitch = self.ptu.get_position()
+            self.main_window.get_ptu_control_view().update_position(azimuth, pitch)
+            self.main_window.get_system_view().add_alert(
+                f"Position retrieved: Azimuth={azimuth:.2f}°, Pitch={pitch:.2f}°", "INFO"
+            )
+        else:
+            self.main_window.get_system_view().add_alert(
+                "Cannot get position: PTU not connected", "ERROR"
+            )
     
     def _on_ptu_send_raw_command(self, command: str):
         """Handle raw command sending (without waiting for Done response)."""
