@@ -607,10 +607,10 @@ class PTUControlThread(threading.Thread):
             return {'success': False, 'error': 'No command provided'}
         
         # Send command with waiting for Done response
-        success = self._send_command(command, wait_for_done=True, timeout=5.0)
+        success = self._send_command(command, wait_for_done=True)
         return {'success': success, 'command': command}
     
-    def _send_command(self, command: str, wait_for_done: bool = True, timeout: float = 2.0) -> bool:
+    def _send_command(self, command: str, wait_for_done: bool = True, timeout: float = 20.0) -> bool:
         """
         Send command to PTU and optionally wait for 'Done' response.
         
@@ -633,7 +633,6 @@ class PTUControlThread(threading.Thread):
             # Validate and clamp A1 (azimuth) and A2 (pitch) values to safety limits
             original_command = command
             command = self._validate_and_clamp_absolute_position_values(command)
-            
             # Log if command was modified
             if command != original_command:
                 logger.warning(
