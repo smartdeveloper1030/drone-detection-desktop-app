@@ -4,7 +4,7 @@ Matches the PTU control interface design from the manual.
 """
 from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, 
                              QPushButton, QComboBox, QLineEdit, QGroupBox,
-                             QGridLayout, QSlider, QCheckBox, QTextEdit,
+                             QGridLayout, QCheckBox, QTextEdit,
                              QSpinBox, QDoubleSpinBox)
 from PyQt5.QtCore import Qt, pyqtSignal
 from PyQt5.QtGui import QFont
@@ -39,7 +39,6 @@ class PTUControlView(QWidget):
         self.current_azimuth = 0.0
         self.current_pitch = 0.0
         self.current_speed = 5
-        self.current_acceleration = 5
     
     def setup_ui(self):
         """Set up the UI components matching the PTU control interface."""
@@ -179,62 +178,49 @@ class PTUControlView(QWidget):
         move_to_position_btn.setToolTip("Move PTU to the position specified in textboxes")
         layout.addWidget(move_to_position_btn, 1, 2)
         
-        # Speed slider
-        speed_label = QLabel("Speed:")
+        # Speed control (below azimuth)
+        speed_label = QLabel("Speed 1~100:")
         speed_label.setStyleSheet("color: white;")
-        layout.addWidget(speed_label, 5, 0)
+        layout.addWidget(speed_label, 2, 0)
         
-        self.speed_slider = QSlider(Qt.Horizontal)
-        self.speed_slider.setRange(0, 100)
-        self.speed_slider.setValue(5)
-        self.speed_slider.valueChanged.connect(self._on_speed_changed)
-        layout.addWidget(self.speed_slider, 5, 1, 1, 2)
+        self.speed_input = QSpinBox()
+        self.speed_input.setRange(1, 100)
+        self.speed_input.setValue(5)
+        self.speed_input.valueChanged.connect(self._on_speed_changed)
+        layout.addWidget(self.speed_input, 2, 1)
         
-        self.speed_label = QLabel("5%")
-        self.speed_label.setStyleSheet("color: white; min-width: 50px;")
-        layout.addWidget(self.speed_label, 5, 3)
-        
-        # Acceleration slider
-        accel_label = QLabel("Acceleration:")
-        accel_label.setStyleSheet("color: white;")
-        layout.addWidget(accel_label, 6, 0)
-        
-        self.accel_slider = QSlider(Qt.Horizontal)
-        self.accel_slider.setRange(0, 100)
-        self.accel_slider.setValue(5)
-        self.accel_slider.valueChanged.connect(self._on_acceleration_changed)
-        layout.addWidget(self.accel_slider, 6, 1, 1, 2)
-        
-        self.accel_label = QLabel("5%")
-        self.accel_label.setStyleSheet("color: white; min-width: 50px;")
-        layout.addWidget(self.accel_label, 6, 3)
+        # Stop button (same function as pause button)
+        stop_btn = QPushButton("Stop")
+        stop_btn.clicked.connect(self._on_pause)
+        stop_btn.setToolTip("Stop PTU movement")
+        layout.addWidget(stop_btn, 2, 2)
         
         # Directional control buttons (3x3 grid)
         # Top row
         up_btn = QPushButton("Up ↑")
         up_btn.clicked.connect(lambda: self._on_directional_move('up'))
-        layout.addWidget(up_btn, 2, 1)
+        layout.addWidget(up_btn, 3, 1)
         
         # Middle row - buttons with same width
         left_btn = QPushButton("← Left")
         left_btn.clicked.connect(lambda: self._on_directional_move('left'))
         left_btn.setMinimumWidth(100)  # Set minimum width for consistency
-        layout.addWidget(left_btn, 3, 0)
+        layout.addWidget(left_btn, 4, 0)
         
         pause_btn = QPushButton("Pause")
         pause_btn.clicked.connect(self._on_pause)
         pause_btn.setMinimumWidth(100)  # Same width as Left and Right
-        layout.addWidget(pause_btn, 3, 1)
+        layout.addWidget(pause_btn, 4, 1)
         
         right_btn = QPushButton("Right →")
         right_btn.clicked.connect(lambda: self._on_directional_move('right'))
         right_btn.setMinimumWidth(100)  # Same width as Left and Pause
-        layout.addWidget(right_btn, 3, 2)
+        layout.addWidget(right_btn, 4, 2)
         
         # Bottom row
         down_btn = QPushButton("Down ↓")
         down_btn.clicked.connect(lambda: self._on_directional_move('down'))
-        layout.addWidget(down_btn, 4, 1)
+        layout.addWidget(down_btn, 5, 1)
         
         # Automatic tracking checkbox
         self.auto_tracking_checkbox = QCheckBox("Enable Automatic Tracking")
@@ -244,7 +230,7 @@ class PTUControlView(QWidget):
         self.auto_tracking_checkbox.setChecked(False)
         self.auto_tracking_checkbox.setStyleSheet("color: white;")
         self.auto_tracking_checkbox.stateChanged.connect(self._on_tracking_toggled)
-        layout.addWidget(self.auto_tracking_checkbox, 7, 0, 1, 3)
+        layout.addWidget(self.auto_tracking_checkbox, 6, 0, 1, 3)
         
         # Keyboard control checkbox
         self.keyboard_control_checkbox = QCheckBox(
@@ -252,7 +238,7 @@ class PTUControlView(QWidget):
         )
         self.keyboard_control_checkbox.setChecked(True)
         self.keyboard_control_checkbox.setStyleSheet("color: white;")
-        layout.addWidget(self.keyboard_control_checkbox, 8, 0, 1, 3)
+        layout.addWidget(self.keyboard_control_checkbox, 7, 0, 1, 3)
         
         # Store button references for enabling/disabling
         self.control_buttons = [
@@ -342,16 +328,9 @@ class PTUControlView(QWidget):
             self.connect_requested.emit(port, baud_rate)
     
     def _on_speed_changed(self, value: int):
-        """Handle speed slider change."""
+        """Handle speed input change."""
         self.current_speed = value
-        self.speed_label.setText(f"{value}%")
         self.set_speed.emit(value)
-    
-    def _on_acceleration_changed(self, value: int):
-        """Handle acceleration slider change."""
-        self.current_acceleration = value
-        self.accel_label.setText(f"{value}%")
-        self.set_acceleration.emit(value)
     
     def _on_directional_move(self, direction: str):
         """Handle directional movement using H61/H62/H63/H64 commands."""

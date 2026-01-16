@@ -782,10 +782,10 @@ class PTUControlThread(threading.Thread):
             return {'success': False, 'error': 'No command provided'}
         
         # Send command with waiting for Done response
-        success = self._send_command(command, wait_for_done=True)
+        success = self._send_command(command, wait_for_done=True, tiemout=0.5)
         return {'success': success, 'command': command}
     
-    def _send_command(self, command: str, wait_for_done: bool = True, timeout: float = 20.0) -> bool:
+    def _send_command(self, command: str, wait_for_done: bool = True, timeout: float = 5.0) -> bool:
         """
         Send command to PTU and optionally wait for 'Done' response.
         
