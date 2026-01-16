@@ -328,20 +328,6 @@ class PTUControlView(QWidget):
         
         layout.addStretch()
         
-        # Send command
-        send_label = QLabel("Send:")
-        send_label.setStyleSheet("color: white;")
-        layout.addWidget(send_label)
-        
-        self.send_input = QLineEdit()
-        self.send_input.setPlaceholderText("Enter command (e.g., H12,45,30,20E)")
-        self.send_input.returnPressed.connect(self._on_send_command)
-        layout.addWidget(self.send_input)
-        
-        send_btn = QPushButton("Send")
-        send_btn.clicked.connect(self._on_send_command)
-        layout.addWidget(send_btn)
-        
         panel.setLayout(layout)
         return panel
     
@@ -429,13 +415,6 @@ class PTUControlView(QWidget):
     def _on_setup(self):
         """Handle setup."""
         self.add_output("Setup (not implemented)")
-    
-    def _on_send_command(self):
-        """Handle send command."""
-        command = self.send_input.text()
-        if command:
-            self.send_raw_command.emit(command)
-            self.send_input.clear()
     
     def _on_tracking_toggled(self, state):
         """Handle automatic tracking checkbox toggle."""
