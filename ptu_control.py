@@ -21,7 +21,9 @@ PTU_AZIMUTH_MAX = 60.0    # degrees (PAN_MAX)
 PTU_PITCH_MIN = -45.0     # degrees (TILT_MIN)
 PTU_PITCH_MAX = 45.0      # degrees (TILT_MAX)
 PULSE_TO_DEGREE = 0.000937500  # pulse->degree conversion factor (from H00)
-MAX_SPEED = 450
+MAX_SPEED_PERCENT = 500  # Maximum speed percentage (from H93: Max_speed_percent = 500)
+MAX_SPEED_PULSE_PER_SEC = 20000  # Maximum speed in pulse/s (from H94: Max_speed(pulse/s) = 20000)
+MAX_SPEED = 10000  # Legacy constant, kept for backward compatibility
 
 
 def angle_to_pulse(angle: float) -> int:
@@ -52,6 +54,26 @@ def pulse_to_angle(pulse: int) -> float:
         Angle in degrees
     """
     return float(pulse * PULSE_TO_DEGREE)
+
+
+def speed_percent_to_ptu_speed(speed_percent: float) -> int:
+    """
+    Convert UI speed percentage (0-100) to PTU speed in pulse/s (0-MAX_SPEED_PULSE_PER_SEC).
+    
+    Formula: ptu_speed = (speed_percent / 100) * MAX_SPEED_PULSE_PER_SEC
+    When percentage is 100%, speed is max_speed (20000 pulse/s).
+    
+    Args:
+        speed_percent: Speed percentage from UI (0-100)
+        
+    Returns:
+        PTU speed in pulse/s as integer (0-MAX_SPEED_PULSE_PER_SEC)
+    """
+    # Clamp to valid range
+    speed_percent = max(0.0, min(100.0, speed_percent))
+    # Convert to PTU speed in pulse/s
+    ptu_speed = int(round((speed_percent / 100.0) * MAX_SPEED_PULSE_PER_SEC))
+    return ptu_speed
 
 class PTUCommandType(Enum):
     """Command types for PTU thread communication."""
@@ -256,8 +278,9 @@ class PTUControlThread(threading.Thread):
             return {'success': True}  # Already disconnected
         
         try:
-            # Move to safe position before disconnecting
-            self._send_command(f"H51,0,0,{MAX_SPEED}E", wait_for_done=False)
+            # Move to safe position before disconnecting (use 20% speed = 100 in PTU speed)
+            safe_speed_ptu = speed_percent_to_ptu_speed(20)
+            self._send_command(f"H51,0,0,{safe_speed_ptu}E", wait_for_done=False)
             time.sleep(0.5)
         except:
             pass
@@ -289,15 +312,16 @@ class PTUControlThread(threading.Thread):
         # Convert angles to pulses (PTU expects pulse values, not degrees)
         azimuth_pulse = angle_to_pulse(azimuth)
         pitch_pulse = angle_to_pulse(pitch)
-        speed_int = int(round(speed))
-        command = f"H51,{azimuth_pulse},{pitch_pulse},{speed_int}E"
+        # Convert UI speed percentage (0-100) to PTU speed percentage (0-MAX_SPEED_PERCENT)
+        speed_ptu = speed_percent_to_ptu_speed(speed)
+        command = f"H51,{azimuth_pulse},{pitch_pulse},{speed_ptu}E"
         success = self._send_command(command, wait_for_done=True, timeout=5.0)
         
         if success:
             with self.position_lock:
                 self.current_azimuth = azimuth
                 self.current_pitch = pitch
-            logger.info(f"Moving to: Azimuth={azimuth:.2f}° ({azimuth_pulse} pulses), Pitch={pitch:.2f}° ({pitch_pulse} pulses), Speed={speed_int}")
+            logger.info(f"Moving to: Azimuth={azimuth:.2f}° ({azimuth_pulse} pulses), Pitch={pitch:.2f}° ({pitch_pulse} pulses), Speed={speed}% (PTU: {speed_ptu})")
         
         return {'success': success, 'azimuth': azimuth, 'pitch': pitch, 'command': command}
     
@@ -329,10 +353,11 @@ class PTUControlThread(threading.Thread):
         # Convert angle deltas to pulses (PTU expects pulse values, not degrees)
         delta_azimuth_pulse = angle_to_pulse(actual_delta_azimuth)
         delta_pitch_pulse = angle_to_pulse(actual_delta_pitch)
-        speed_int = int(round(speed))
+        # Convert UI speed percentage (0-100) to PTU speed percentage (0-MAX_SPEED_PERCENT)
+        speed_ptu = speed_percent_to_ptu_speed(speed)
         
         # Send H52 command: H52,delta_azimuth_pulse,delta_pitch_pulse,speedE
-        command = f"H52,{delta_azimuth_pulse},{delta_pitch_pulse},{speed_int}E"
+        command = f"H52,{delta_azimuth_pulse},{delta_pitch_pulse},{speed_ptu}E"
         success = self._send_command(command, wait_for_done=True, timeout=5.0)
         
         if success:
@@ -340,7 +365,7 @@ class PTUControlThread(threading.Thread):
             with self.position_lock:
                 self.current_azimuth = new_azimuth
                 self.current_pitch = new_pitch
-            logger.info(f"Moving relative: Delta Azimuth={actual_delta_azimuth:.2f}° ({delta_azimuth_pulse} pulses), Delta Pitch={actual_delta_pitch:.2f}° ({delta_pitch_pulse} pulses), Speed={speed_int}, New Position=({new_azimuth:.2f}°, {new_pitch:.2f}°)")
+            logger.info(f"Moving relative: Delta Azimuth={actual_delta_azimuth:.2f}° ({delta_azimuth_pulse} pulses), Delta Pitch={actual_delta_pitch:.2f}° ({delta_pitch_pulse} pulses), Speed={speed}% (PTU: {speed_ptu}), New Position=({new_azimuth:.2f}°, {new_pitch:.2f}°)")
         
         return {'success': success, 'delta_azimuth': actual_delta_azimuth, 'delta_pitch': actual_delta_pitch, 
                 'azimuth': new_azimuth, 'pitch': new_pitch, 'command': command}
@@ -364,8 +389,10 @@ class PTUControlThread(threading.Thread):
         if direction not in command_map:
             return {'success': False, 'error': f'Invalid direction: {direction}'}
         
+        # Convert UI speed percentage (0-100) to PTU speed percentage (0-MAX_SPEED_PERCENT)
+        speed_ptu = speed_percent_to_ptu_speed(speed)
         # Format command: H61,<speed>E (or H62, H63, H64)
-        command = f"{command_map[direction]},{speed}E"
+        command = f"{command_map[direction]},{speed_ptu}E"
         success = self._send_command(command, wait_for_done=True, timeout=2.0)
         return {'success': success, 'command': command}
     
