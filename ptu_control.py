@@ -597,6 +597,98 @@ class PTUControlThread(threading.Thread):
             # Not a position command, return as-is
             return original_command
     
+    def _validate_and_clamp_relative_position_values(self, command: str) -> str:
+        """
+        Validate and clamp relative position values in H52 commands to safety limits.
+        
+        Steps:
+        1. Get the current position
+        2. Apply the relative parameters (delta_azimuth, delta_pitch) to current position
+        3. Clamp the resulting position to safety limits
+        4. Calculate adjusted deltas and reconstruct command
+        
+        Args:
+            command: Command string (e.g., "H52,5,-10,20E")
+            
+        Returns:
+            Command string with clamped relative values (if applicable)
+        """
+        # Remove trailing 'E' if present for parsing
+        original_command = command
+        has_trailing_e = command.endswith('E')
+        if has_trailing_e:
+            command = command[:-1]
+        
+        # Check if this is a relative position command (H52)
+        # Format: H52,delta_azimuth,delta_pitch,speed
+        relative_command_pattern = r'^(H52),(-?\d+\.?\d*),(-?\d+\.?\d*),(-?\d+\.?\d*)$'
+        match = re.match(relative_command_pattern, command)
+        
+        if match:
+            cmd_type = match.group(1)  # H52
+            delta_a1_str = match.group(2)  # Delta Azimuth
+            delta_a2_str = match.group(3)  # Delta Pitch
+            speed_str = match.group(4)
+            
+            try:
+                # Parse values
+                delta_a1 = float(delta_a1_str)  # Delta Azimuth
+                delta_a2 = float(delta_a2_str)  # Delta Pitch
+                speed = float(speed_str)
+                
+                # Step 1: Get the current position
+                with self.position_lock:
+                    current_azimuth = self.current_azimuth
+                    current_pitch = self.current_pitch
+                
+                # Step 2: Apply relative parameters to current position
+                new_azimuth = current_azimuth + delta_a1
+                new_pitch = current_pitch + delta_a2
+                
+                # Step 3: Clamp position to safety limits
+                new_azimuth_clamped = max(self.safety_azimuth_min, min(self.safety_azimuth_max, new_azimuth))
+                new_pitch_clamped = max(self.safety_pitch_min, min(self.safety_pitch_max, new_pitch))
+                
+                # Calculate adjusted deltas after clamping
+                adjusted_delta_a1 = new_azimuth_clamped - current_azimuth
+                adjusted_delta_a2 = new_pitch_clamped - current_pitch
+                
+                # Check if values were clamped
+                if new_azimuth != new_azimuth_clamped:
+                    logger.warning(
+                        f"H52 relative movement clamped: "
+                        f"Azimuth {current_azimuth:.2f}° + {delta_a1}° = {new_azimuth:.2f}° -> {new_azimuth_clamped:.2f}° "
+                        f"(limit: {self.safety_azimuth_min}° to {self.safety_azimuth_max}°), "
+                        f"adjusted delta: {delta_a1}° -> {adjusted_delta_a1:.2f}°"
+                    )
+                
+                if new_pitch != new_pitch_clamped:
+                    logger.warning(
+                        f"H52 relative movement clamped: "
+                        f"Pitch {current_pitch:.2f}° + {delta_a2}° = {new_pitch:.2f}° -> {new_pitch_clamped:.2f}° "
+                        f"(limit: {self.safety_pitch_min}° to {self.safety_pitch_max}°), "
+                        f"adjusted delta: {delta_a2}° -> {adjusted_delta_a2:.2f}°"
+                    )
+                
+                # Reconstruct command with adjusted delta values (as integers)
+                delta_a1_int = int(round(adjusted_delta_a1))
+                delta_a2_int = int(round(adjusted_delta_a2))
+                speed_int = int(round(speed))
+                
+                validated_command = f"{cmd_type},{delta_a1_int},{delta_a2_int},{speed_int}"
+                if has_trailing_e:
+                    validated_command += 'E'
+                
+                return validated_command
+                
+            except ValueError as e:
+                logger.error(f"Error parsing H52 command values: {e}")
+                # Return original command if parsing fails
+                return original_command
+        else:
+            # Not a relative position command, return as-is
+            return original_command
+    
     def _handle_send_raw_command(self, args: Dict[str, Any]) -> Dict[str, Any]:
         """Handle raw command sending without waiting for Done response."""
         if not self.is_connected:
@@ -630,9 +722,16 @@ class PTUControlThread(threading.Thread):
             if not command.endswith('E'):
                 command += 'E'
             
-            # Validate and clamp A1 (azimuth) and A2 (pitch) values to safety limits
+            # Validate and clamp position values to safety limits
             original_command = command
-            command = self._validate_and_clamp_absolute_position_values(command)
+            
+            # Check if this is a relative movement command (H52)
+            if command.startswith('H52'):
+                command = self._validate_and_clamp_relative_position_values(command)
+            else:
+                # For absolute position commands (H51, H12, etc.)
+                command = self._validate_and_clamp_absolute_position_values(command)
+            
             # Log if command was modified
             if command != original_command:
                 logger.warning(
