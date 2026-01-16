@@ -472,8 +472,11 @@ class PTUControlView(QWidget):
         self.current_azimuth = azimuth
         self.current_pitch = pitch
         # Set integer values (QSpinBox will round)
-        self.azimuth_input.setValue(int(round(azimuth)))
-        self.pitch_input.setValue(int(round(pitch)))
+        azimuth_int = int(round(azimuth))
+        pitch_int = int(round(pitch))
+        self.azimuth_input.setValue(azimuth_int)
+        self.pitch_input.setValue(pitch_int)
+        logger.debug(f"update_position: Updated textboxes - Azimuth={azimuth_int}°, Pitch={pitch_int}° (from {azimuth:.2f}°, {pitch:.2f}°)")
     
     def add_output(self, message: str):
         """Add message to output area (deprecated - use add_command_history instead)."""

@@ -691,12 +691,18 @@ class DroneDetectionApp:
     def _on_ptu_get_position(self):
         """Handle PTU get position request."""
         if self.ptu.is_connected:
+            # Get position from PTU (queries H10 and H20 commands)
             azimuth, pitch = self.ptu.get_position()
+            # Update the textboxes with retrieved values
             self.main_window.get_ptu_control_view().update_position(azimuth, pitch)
+            logger.info(f"Get Position: Updated textboxes - Azimuth={azimuth:.2f}°, Pitch={pitch:.2f}°")
             self.main_window.get_system_view().add_alert(
                 f"Position retrieved: Azimuth={azimuth:.2f}°, Pitch={pitch:.2f}°", "INFO"
             )
         else:
+            self.main_window.get_ptu_control_view().add_command_history(
+                "Cannot get position: PTU not connected", "error"
+            )
             self.main_window.get_system_view().add_alert(
                 "Cannot get position: PTU not connected", "ERROR"
             )
