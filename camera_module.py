@@ -109,10 +109,13 @@ class CameraModule:
         
         if ret:
             self.frame_count += 1
-            # In test mode, loop the video if it reaches the end
-            if self.is_test_mode and not ret:
-                self.cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
-                ret, frame = self.cap.read()
+        else:
+            # Video has ended - stop reading
+            if self.is_test_mode:
+                logger.info("Video has reached the end. Stopping video playback.")
+                self.is_running = False
+            else:
+                logger.warning("Failed to read frame from camera/video source")
         
         return ret, frame
     

@@ -41,6 +41,7 @@ class Config:
     BALLOON_BLACKLIST_COLORS: List[str] = [
         c.strip() for c in os.getenv("BALLOON_BLACKLIST_COLORS", "black,orange,yellow").split(",")
     ]
+    SELECTED_BALLOON_COLOR: str = os.getenv("SELECTED_BALLOON_COLOR", "red").lower()  # Selected color for balloon detection
     
     # Detection Classes
     DETECT_PERSON: bool = os.getenv("DETECT_PERSON", "true").lower() == "true"
