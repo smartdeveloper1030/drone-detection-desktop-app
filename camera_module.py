@@ -3,6 +3,7 @@ Camera module for handling video streams from RTSP or USB cameras.
 """
 import cv2
 import numpy as np
+import os
 from typing import Optional, Tuple
 from config import Config
 import logging
@@ -35,9 +36,17 @@ class CameraModule:
         
         try:
             if Config.CAMERA_TYPE == "rtsp":
-                # RTSP stream
+                # RTSP stream with low-latency options
+                # Set environment variables for FFmpeg low-latency options
+                # These reduce RTSP stream buffering significantly
+                os.environ['OPENCV_FFMPEG_CAPTURE_OPTIONS'] = (
+                    'rtsp_transport;tcp|'  # Use TCP instead of UDP for reliability
+                    'buffer_size;1|'  # Minimal buffer (1 frame)
+                    'max_delay;500000|'  # Max delay 500ms in microseconds
+                    'stimeout;2000000'  # Socket timeout 2s
+                )
                 self.cap = cv2.VideoCapture(self.source, cv2.CAP_FFMPEG)
-                logger.info(f"Connecting to RTSP stream: {self.source}")
+                logger.info(f"Connecting to RTSP stream with low-latency options: {self.source}")
             elif Config.CAMERA_TYPE == "usb":
                 # USB camera
                 self.cap = cv2.VideoCapture(int(self.source))
@@ -55,15 +64,24 @@ class CameraModule:
             self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.height)
             self.cap.set(cv2.CAP_PROP_FPS, self.fps)
             
-            # Set buffer size to minimize latency (drop old frames)
+            # Set buffer size to 1 for minimal latency (drop old frames)
             # Buffer size of 1 means we always get the latest frame, dropping old ones
             # This is critical for reducing latency and preventing frame buildup
             try:
-                self.cap.set(cv2.CAP_PROP_BUFFERSIZE, Config.CAMERA_BUFFER_SIZE)
+                self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)  # Force buffer size to 1 for lowest latency
                 actual_buffer = self.cap.get(cv2.CAP_PROP_BUFFERSIZE)
                 logger.info(f"Camera buffer size set to {Config.CAMERA_BUFFER_SIZE} (actual: {actual_buffer})")
             except Exception as e:
                 logger.warning(f"Could not set camera buffer size: {str(e)}")
+            
+            # For RTSP: Set additional low-latency properties
+            if Config.CAMERA_TYPE == "rtsp":
+                try:
+                    # Try to set OpenCV's FFMPEG options for low latency
+                    # These may not work on all systems, but worth trying
+                    self.cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*'H264'))
+                except Exception as e:
+                    logger.debug(f"Could not set RTSP codec options: {str(e)}")
             
             # Get actual properties
             actual_width = int(self.cap.get(cv2.CAP_PROP_FRAME_WIDTH))
@@ -87,6 +105,7 @@ class CameraModule:
     def read_frame(self) -> Tuple[bool, Optional[np.ndarray]]:
         """
         Read a frame from the camera source.
+        For low latency: skip old buffered frames to get the latest one.
         
         Returns:
             Tuple[bool, Optional[np.ndarray]]: (success, frame)
@@ -95,6 +114,16 @@ class CameraModule:
             return False, None
         
         try:
+            # For low latency: skip old frames in buffer to get the latest frame
+            # This reduces latency by discarding stale frames
+            if Config.CAMERA_TYPE == "rtsp" and Config.CAMERA_BUFFER_SIZE > 1:
+                # Read and discard old frames, keeping only the latest
+                for _ in range(Config.CAMERA_BUFFER_SIZE - 1):
+                    ret_temp, _ = self.cap.read()
+                    if not ret_temp:
+                        break
+            
+            # Read the latest frame
             ret, frame = self.cap.read()
             
             if ret:

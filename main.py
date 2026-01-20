@@ -96,6 +96,7 @@ class DetectionThread(threading.Thread):
     def add_frame(self, frame: np.ndarray) -> bool:
         """
         Add frame to detection queue (non-blocking).
+        For low latency: always keep only the latest frame.
         
         Args:
             frame: Frame to process
@@ -105,15 +106,17 @@ class DetectionThread(threading.Thread):
         """
         self.current_frame_id += 1
         
-        # If queue is full, remove oldest frame
-        if self.frame_queue.full():
+        # For low latency: always clear old frames and keep only the latest
+        # This ensures we process the most recent frame, not stale ones
+        while not self.frame_queue.empty():
             try:
                 self.frame_queue.get_nowait()
                 self.dropped_count += 1
             except Empty:
-                pass
+                break
         
         try:
+            # Copy frame to avoid issues if frame is modified elsewhere
             self.frame_queue.put_nowait((frame.copy(), self.current_frame_id))
             return True
         except:
@@ -277,13 +280,15 @@ class DroneDetectionApp:
         # Update available PTU ports
         self._update_ptu_ports()
         
-        # Start detection thread
+        # Start detection thread with minimal queue for low latency
+        # Queue size of 1 ensures we always process the latest frame, dropping old ones
+        detection_queue_size = max(1, Config.DETECTION_QUEUE_SIZE)  # At least 1
         self.detection_thread = DetectionThread(
             self.detector,
-            max_queue_size=Config.DETECTION_QUEUE_SIZE
+            max_queue_size=detection_queue_size
         )
         self.detection_thread.start()
-        logger.info(f"Detection thread started (frame skip: {Config.DETECTION_FRAME_SKIP}, queue size: {Config.DETECTION_QUEUE_SIZE})")
+        logger.info(f"Detection thread started (frame skip: {Config.DETECTION_FRAME_SKIP}, queue size: {detection_queue_size})")
         
         # Start frame processing only if camera is connected
         if camera_connected:
