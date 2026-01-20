@@ -57,9 +57,9 @@ class CameraModule:
             except:
                 pass
             
-            # 2. Set LOW resolution for capture (reduces data transfer)
-            self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.display_width)  # Use DISPLAY res for capture!
-            self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.display_height)
+            # 2. Set resolution to capture resolution
+            self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.capture_width)
+            self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.capture_height)
             
             # 3. Try MJPG compression (faster than YUYV)
             try:
@@ -101,26 +101,17 @@ class CameraModule:
     def read_latest_frame(self) -> Tuple[bool, Optional[np.ndarray]]:
         """
         Ultra-fast frame reading.
-        Returns frame at DISPLAY resolution (640x480) for fast UI.
+        Returns frame at camera's native resolution.
         """
         if not self.cap or not self.cap.isOpened():
             return False, None
-        
-        start_time = time.perf_counter()
         
         try:
             # FASTEST METHOD: Simple read with buffer=1
             # With buffer=1, read() gives latest frame
             ret, frame = self.cap.read()
             
-            read_time = (time.perf_counter() - start_time) * 1000
-            
             if ret:
-                # Ensure frame is display resolution (should already be 640x480)
-                if frame.shape[1] != self.display_width or frame.shape[0] != self.display_height:
-                    # Resize if needed (rare)
-                    frame = cv2.resize(frame, (self.display_width, self.display_height))
-                
                 self.frame_count += 1
                 return True, frame
             
@@ -134,29 +125,9 @@ class CameraModule:
     
     def read_frame_for_detection(self) -> Tuple[bool, Optional[np.ndarray]]:
         """
-        Read frame at HIGHER resolution for better detection.
-        Optional: Use this for detection thread only.
+        Read frame for detection (same as read_latest_frame).
         """
-        if not self.cap or not self.cap.isOpened():
-            return False, None
-        
-        # Temporarily switch to higher resolution for detection
-        # (Note: This adds latency - use only if detection needs higher res)
-        try:
-            # Set to detection resolution
-            self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.capture_width)
-            self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.capture_height)
-            
-            # Read frame
-            ret, frame = self.cap.read()
-            
-            # Immediately switch back to display resolution
-            self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.display_width)
-            self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.display_height)
-            
-            return ret, frame
-        except:
-            return False, None
+        return self.read_latest_frame()
     
     def get_frame_size(self) -> Tuple[int, int]:
         """
