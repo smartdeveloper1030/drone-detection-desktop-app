@@ -6,7 +6,7 @@ This is Milestone 1 of the Drone Detection System, focusing on **Camera Module**
 
 ## Features
 
-- **Camera Module**: Supports RTSP streams, USB cameras, and test mode with video files
+- **Camera Module**: Supports RTSP streams and USB cameras
 - **YOLOv8 Detection**: Detects drones, balloons, and human shapes
 - **Color Classification**: Classifies balloon colors for whitelist/blacklist determination
 - **Dual UI Screens**: 
@@ -49,10 +49,6 @@ CAMERA_FPS=30
 CAMERA_WIDTH=1920
 CAMERA_HEIGHT=1080
 
-# Test Mode Configuration
-TEST_OPTION=true
-TEST_VIDEO_PATH=test_videos/sample.mp4
-
 # Detection Configuration
 YOLO_MODEL_PATH=models/yolov8n.pt
 YOLO_CONFIDENCE_THRESHOLD=0.25
@@ -71,10 +67,6 @@ DETECT_BALLOON=true
 UI_REFRESH_RATE=30
 UI_SHOW_FPS=true
 ```
-
-### Test Mode
-
-Set `TEST_OPTION=true` to use a video file instead of a live camera stream. Place your test video at the path specified in `TEST_VIDEO_PATH`.
 
 ## Usage
 
@@ -131,7 +123,6 @@ Balloons are classified by color:
 
 - YOLOv8's default COCO model detects persons but not drones/balloons. For full functionality, you'll need a custom trained model.
 - The system is designed to work with custom YOLOv8 models trained on drone/balloon datasets.
-- Test mode loops the video file when it reaches the end.
 
 ## Future Milestones
 
@@ -152,7 +143,6 @@ Balloons are classified by color:
 
 - Ensure YOLOv8 model is downloaded
 - Check confidence threshold settings
-- Verify test video path if using test mode
 
 ### Performance Issues
 

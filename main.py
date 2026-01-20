@@ -179,9 +179,6 @@ class DroneDetectionApp:
         # Connect prediction horizon change signal
         self.main_window.get_system_view().prediction_horizon_changed.connect(self._on_prediction_horizon_changed)
         
-        # Connect test mode change signal
-        self.main_window.get_system_view().test_mode_changed.connect(self._on_test_mode_changed)
-        
         # Connect PTU control signals
         ptu_view = self.main_window.get_ptu_control_view()
         ptu_view.connect_requested.connect(self._on_ptu_connect)
@@ -252,18 +249,12 @@ class DroneDetectionApp:
         logger.info("Warming up model...")
         self.detector.warmup()  # Uses YOLO_INPUT_SIZE from config (default 416)
         
-        # Get test mode from UI
-        test_mode = self.main_window.get_system_view().get_test_mode()
-        # Update Config to match UI
-        Config.TEST_OPTION = test_mode
-        
         # Connect camera (allow app to start even if camera fails)
         camera_connected = self.camera.connect()
         if camera_connected:
             self.main_window.get_system_view().update_camera_status(True)
-            source_type = "video file" if test_mode else "camera"
             self.main_window.get_system_view().add_alert(
-                f"Camera connected - Test Mode: {test_mode} (reading from {source_type})", "INFO"
+                "Camera connected", "INFO"
             )
             
             # Initialize coordinate converter with camera dimensions
@@ -439,6 +430,13 @@ class DroneDetectionApp:
         if not self.is_running:
             return
         
+        # Check if camera is still connected before reading
+        if not self.camera.is_connected():
+            self.is_running = False
+            self.frame_timer.stop()
+            self.main_window.get_system_view().update_camera_status(False)
+            return
+        
         try:
             # Read frame
             ret, frame = self.camera.read_frame()
@@ -455,6 +453,10 @@ class DroneDetectionApp:
                 return
         except Exception as e:
             logger.error(f"Error reading frame: {str(e)}")
+            # If camera was released during read, stop processing gracefully
+            if not self.camera.is_connected():
+                self.is_running = False
+                self.frame_timer.stop()
             self.main_window.get_system_view().update_camera_status(False)
             return
         
@@ -802,49 +804,6 @@ class DroneDetectionApp:
         """
         self.ptu_tracking_enabled = enable
         logger.info(f"PTU tracking {'enabled' if enable else 'disabled'}")
-    
-    def _on_test_mode_changed(self, test_mode: bool):
-        """Handle test mode change from UI."""
-        logger.info(f"Test mode changed to: {test_mode}")
-        
-        # Update Config
-        Config.TEST_OPTION = test_mode
-        
-        # Disconnect current camera if connected
-        if self.camera.is_connected():
-            self.camera.release()
-            self.main_window.get_system_view().update_camera_status(False)
-            self.is_running = False
-            self.frame_timer.stop()
-        
-        # Try to connect with new test mode setting
-        camera_connected = self.camera.connect()
-        if camera_connected:
-            self.main_window.get_system_view().update_camera_status(True)
-            source_type = "video file" if test_mode else "camera"
-            self.main_window.get_system_view().add_alert(
-                f"Camera reconnected - Test Mode: {test_mode} (reading from {source_type})", "INFO"
-            )
-            
-            # Initialize coordinate converter with camera dimensions
-            frame_width, frame_height = self.camera.get_frame_size()
-            if frame_width > 0 and frame_height > 0:
-                self.coordinate_converter = CoordinateConverter(
-                    image_width=frame_width,
-                    image_height=frame_height,
-                    horizontal_fov=60.0,
-                    vertical_fov=45.0
-                )
-                logger.info(f"Coordinate converter initialized: {frame_width}x{frame_height}")
-            
-            # Start frame processing
-            frame_interval = int(1000 / Config.UI_REFRESH_RATE)
-            self.frame_timer.start(frame_interval)
-            self.is_running = True
-        else:
-            self.main_window.get_system_view().add_alert(
-                f"Failed to connect to {'video file' if test_mode else 'camera'}", "ERROR"
-            )
 
 
 def main():

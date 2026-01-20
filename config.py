@@ -22,10 +22,6 @@ class Config:
     CAMERA_HEIGHT: int = int(os.getenv("CAMERA_HEIGHT", "1080"))
     CAMERA_BUFFER_SIZE: int = int(os.getenv("CAMERA_BUFFER_SIZE", "1"))  # Buffer size (1 = drop old frames)
     
-    # Test Mode Configuration
-    TEST_OPTION: bool = os.getenv("TEST_OPTION", "false").lower() == "true"
-    TEST_VIDEO_PATH: str = os.getenv("TEST_VIDEO_PATH", "test_videos/sample.mp4")
-    
     # Detection Configuration
     DETECT_MODE: str = os.getenv("DETECT_MODE", "drone").lower()  # "balloon", "drone", or "person"
     YOLO_MODEL_PATH: str = os.getenv("YOLO_MODEL_PATH", "models/yolov8n.pt")
@@ -63,9 +59,7 @@ class Config:
     @classmethod
     def get_camera_source(cls) -> Optional[str]:
         """Get the camera source based on configuration."""
-        if cls.TEST_OPTION:
-            return cls.TEST_VIDEO_PATH
-        elif cls.CAMERA_TYPE == "rtsp":
+        if cls.CAMERA_TYPE == "rtsp":
             return cls.CAMERA_RTSP_URL
         elif cls.CAMERA_TYPE == "usb":
             return cls.CAMERA_USB_INDEX

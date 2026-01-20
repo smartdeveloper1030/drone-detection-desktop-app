@@ -1,5 +1,5 @@
 """
-Camera module for handling video streams from RTSP, USB, or test video files.
+Camera module for handling video streams from RTSP or USB cameras.
 """
 import cv2
 import numpy as np
@@ -16,44 +16,25 @@ class CameraModule:
     def __init__(self):
         """Initialize the camera module."""
         self.cap: Optional[cv2.VideoCapture] = None
-        self.is_test_mode = Config.TEST_OPTION
         self.source = Config.get_camera_source()
         self.fps = Config.CAMERA_FPS
         self.width = Config.CAMERA_WIDTH
         self.height = Config.CAMERA_HEIGHT
         self.frame_count = 0
         self.is_running = False
-        
-    def set_test_mode(self, test_mode: bool):
-        """Update test mode setting and source."""
-        self.is_test_mode = test_mode
-        self.source = Config.get_camera_source()
     
     def connect(self) -> bool:
         """
-        Connect to the camera or video source.
+        Connect to the camera source.
         
         Returns:
             bool: True if connection successful, False otherwise
         """
-        # Update test mode and source before connecting
-        self.is_test_mode = Config.TEST_OPTION
+        # Update source before connecting
         self.source = Config.get_camera_source()
         
         try:
-            if self.is_test_mode:
-                # Test mode: use video file
-                if isinstance(self.source, str):
-                    import os
-                    if not os.path.exists(self.source):
-                        logger.error(f"Test video file not found: {self.source}")
-                        return False
-                    self.cap = cv2.VideoCapture(self.source)
-                    logger.info(f"Test mode: Loading video from {self.source}")
-                else:
-                    logger.error("Test mode enabled but TEST_VIDEO_PATH is not a valid string")
-                    return False
-            elif Config.CAMERA_TYPE == "rtsp":
+            if Config.CAMERA_TYPE == "rtsp":
                 # RTSP stream
                 self.cap = cv2.VideoCapture(self.source, cv2.CAP_FFMPEG)
                 logger.info(f"Connecting to RTSP stream: {self.source}")
@@ -66,14 +47,13 @@ class CameraModule:
                 return False
             
             if not self.cap.isOpened():
-                logger.error("Failed to open camera/video source")
+                logger.error("Failed to open camera source")
                 return False
             
-            # Set camera properties if not in test mode
-            if not self.is_test_mode:
-                self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.width)
-                self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.height)
-                self.cap.set(cv2.CAP_PROP_FPS, self.fps)
+            # Set camera properties
+            self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.width)
+            self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.height)
+            self.cap.set(cv2.CAP_PROP_FPS, self.fps)
             
             # Set buffer size to minimize latency (drop old frames)
             # Buffer size of 1 means we always get the latest frame, dropping old ones
@@ -106,7 +86,7 @@ class CameraModule:
     
     def read_frame(self) -> Tuple[bool, Optional[np.ndarray]]:
         """
-        Read a frame from the camera/video source.
+        Read a frame from the camera source.
         
         Returns:
             Tuple[bool, Optional[np.ndarray]]: (success, frame)
@@ -114,19 +94,19 @@ class CameraModule:
         if not self.cap or not self.cap.isOpened():
             return False, None
         
-        ret, frame = self.cap.read()
-        
-        if ret:
-            self.frame_count += 1
-        else:
-            # Video has ended - stop reading
-            if self.is_test_mode:
-                logger.info("Video has reached the end. Stopping video playback.")
-                self.is_running = False
+        try:
+            ret, frame = self.cap.read()
+            
+            if ret:
+                self.frame_count += 1
             else:
-                logger.warning("Failed to read frame from camera/video source")
-        
-        return ret, frame
+                logger.warning("Failed to read frame from camera source")
+            
+            return ret, frame
+        except Exception as e:
+            # Camera might have been released during read
+            logger.warning(f"Error reading frame (camera may have been released): {str(e)}")
+            return False, None
     
     def get_fps(self) -> float:
         """

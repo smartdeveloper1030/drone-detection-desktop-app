@@ -20,9 +20,6 @@ class SystemView(QWidget):
     # Signal emitted when prediction horizon changes
     prediction_horizon_changed = pyqtSignal(int)  # Emits new horizon in milliseconds
     
-    # Signal emitted when test mode changes
-    test_mode_changed = pyqtSignal(bool)  # Emits True if test mode enabled, False otherwise
-    
     def __init__(self, parent=None):
         """Initialize the system view."""
         super().__init__(parent)
@@ -84,43 +81,16 @@ class SystemView(QWidget):
         config_group = QGroupBox("Configuration")
         config_layout = QGridLayout()
         
-        test_mode_label = QLabel("Test Mode:")
-        test_mode_label.setStyleSheet("color: white;")
-        config_layout.addWidget(test_mode_label, 0, 0)
-        self.test_mode_checkbox = QCheckBox()
-        self.test_mode_checkbox.setChecked(Config.TEST_OPTION)
-        self.test_mode_checkbox.setStyleSheet("""
-            QCheckBox {
-                color: white;
-            }
-            QCheckBox::indicator {
-                width: 20px;
-                height: 20px;
-                border: 2px solid #555;
-                border-radius: 3px;
-                background-color: #3b3b3b;
-            }
-            QCheckBox::indicator:checked {
-                background-color: #00aa00;
-                border-color: #00ff00;
-            }
-            QCheckBox::indicator:hover {
-                border-color: #777;
-            }
-        """)
-        self.test_mode_checkbox.stateChanged.connect(self._on_test_mode_changed)
-        config_layout.addWidget(self.test_mode_checkbox, 0, 1)
-        
         camera_type_label = QLabel("Camera Type:")
         camera_type_label.setStyleSheet("color: white;")
-        config_layout.addWidget(camera_type_label, 1, 0)
+        config_layout.addWidget(camera_type_label, 0, 0)
         camera_type_value = QLabel(Config.CAMERA_TYPE.upper())
         camera_type_value.setStyleSheet("color: white;")
-        config_layout.addWidget(camera_type_value, 1, 1)
+        config_layout.addWidget(camera_type_value, 0, 1)
         
         conf_label = QLabel("Confidence Threshold:")
         conf_label.setStyleSheet("color: white;")
-        config_layout.addWidget(conf_label, 3, 0)
+        config_layout.addWidget(conf_label, 1, 0)
         self.conf_threshold_spinbox = QDoubleSpinBox()
         self.conf_threshold_spinbox.setMinimum(0.0)
         self.conf_threshold_spinbox.setMaximum(1.0)
@@ -144,11 +114,11 @@ class SystemView(QWidget):
             }
         """)
         self.conf_threshold_spinbox.valueChanged.connect(self._on_confidence_threshold_changed)
-        config_layout.addWidget(self.conf_threshold_spinbox, 3, 1)
+        config_layout.addWidget(self.conf_threshold_spinbox, 1, 1)
         
         pred_horizon_label = QLabel("Prediction Horizon:")
         pred_horizon_label.setStyleSheet("color: white;")
-        config_layout.addWidget(pred_horizon_label, 4, 0)
+        config_layout.addWidget(pred_horizon_label, 2, 0)
         self.pred_horizon_spinbox = QSpinBox()
         self.pred_horizon_spinbox.setMinimum(0)
         self.pred_horizon_spinbox.setMaximum(5000)
@@ -172,7 +142,7 @@ class SystemView(QWidget):
             }
         """)
         self.pred_horizon_spinbox.valueChanged.connect(self._on_prediction_horizon_changed)
-        config_layout.addWidget(self.pred_horizon_spinbox, 4, 1)
+        config_layout.addWidget(self.pred_horizon_spinbox, 2, 1)
         
         config_group.setLayout(config_layout)
         main_layout.addWidget(config_group)
@@ -328,13 +298,4 @@ class SystemView(QWidget):
         self.pred_horizon_spinbox.blockSignals(True)
         self.pred_horizon_spinbox.setValue(value)
         self.pred_horizon_spinbox.blockSignals(False)
-    
-    def _on_test_mode_changed(self, state: int):
-        """Handle test mode checkbox change."""
-        is_checked = (state == Qt.Checked)
-        self.test_mode_changed.emit(is_checked)
-    
-    def get_test_mode(self) -> bool:
-        """Get current test mode state."""
-        return self.test_mode_checkbox.isChecked()
 
