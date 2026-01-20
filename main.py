@@ -179,6 +179,9 @@ class DroneDetectionApp:
         # Connect prediction horizon change signal
         self.main_window.get_system_view().prediction_horizon_changed.connect(self._on_prediction_horizon_changed)
         
+        # Connect test mode change signal
+        self.main_window.get_system_view().test_mode_changed.connect(self._on_test_mode_changed)
+        
         # Connect PTU control signals
         ptu_view = self.main_window.get_ptu_control_view()
         ptu_view.connect_requested.connect(self._on_ptu_connect)
@@ -244,29 +247,36 @@ class DroneDetectionApp:
         logger.info("Warming up model...")
         self.detector.warmup()  # Uses YOLO_INPUT_SIZE from config (default 416)
         
-        # Connect camera
-        if not self.camera.connect():
-            logger.error("Failed to connect to camera")
+        # Get test mode from UI
+        test_mode = self.main_window.get_system_view().get_test_mode()
+        # Update Config to match UI
+        Config.TEST_OPTION = test_mode
+        
+        # Connect camera (allow app to start even if camera fails)
+        camera_connected = self.camera.connect()
+        if camera_connected:
+            self.main_window.get_system_view().update_camera_status(True)
+            source_type = "video file" if test_mode else "camera"
             self.main_window.get_system_view().add_alert(
-                "Failed to connect to camera/video source", "ERROR"
+                f"Camera connected - Test Mode: {test_mode} (reading from {source_type})", "INFO"
             )
-            return False
-        
-        self.main_window.get_system_view().update_camera_status(True)
-        self.main_window.get_system_view().add_alert(
-            f"Camera connected - Test Mode: {Config.TEST_OPTION}", "INFO"
-        )
-        
-        # Initialize coordinate converter with camera dimensions
-        frame_width, frame_height = self.camera.get_frame_size()
-        if frame_width > 0 and frame_height > 0:
-            self.coordinate_converter = CoordinateConverter(
-                image_width=frame_width,
-                image_height=frame_height,
-                horizontal_fov=60.0,  # Default FOV, can be configured
-                vertical_fov=45.0
+            
+            # Initialize coordinate converter with camera dimensions
+            frame_width, frame_height = self.camera.get_frame_size()
+            if frame_width > 0 and frame_height > 0:
+                self.coordinate_converter = CoordinateConverter(
+                    image_width=frame_width,
+                    image_height=frame_height,
+                    horizontal_fov=60.0,  # Default FOV, can be configured
+                    vertical_fov=45.0
+                )
+                logger.info(f"Coordinate converter initialized: {frame_width}x{frame_height}")
+        else:
+            logger.warning("Camera not connected - app will continue without video feed")
+            self.main_window.get_system_view().update_camera_status(False)
+            self.main_window.get_system_view().add_alert(
+                "Camera is not connected", "WARNING"
             )
-            logger.info(f"Coordinate converter initialized: {frame_width}x{frame_height}")
         
         # Update available PTU ports
         self._update_ptu_ports()
@@ -279,10 +289,14 @@ class DroneDetectionApp:
         self.detection_thread.start()
         logger.info(f"Detection thread started (frame skip: {Config.DETECTION_FRAME_SKIP}, queue size: {Config.DETECTION_QUEUE_SIZE})")
         
-        # Start frame processing
-        frame_interval = int(1000 / Config.UI_REFRESH_RATE)  # Convert to milliseconds
-        self.frame_timer.start(frame_interval)
-        self.is_running = True
+        # Start frame processing only if camera is connected
+        if camera_connected:
+            frame_interval = int(1000 / Config.UI_REFRESH_RATE)  # Convert to milliseconds
+            self.frame_timer.start(frame_interval)
+            self.is_running = True
+        else:
+            self.is_running = False
+            logger.info("Frame processing not started - camera not connected")
         
         # Set initial mode in UI
         self.main_window.set_mode(Config.DETECT_MODE)
@@ -293,9 +307,6 @@ class DroneDetectionApp:
             # Update blacklist to only include selected color
             Config.BALLOON_BLACKLIST_COLORS = [selected_color]
             self.main_window.set_color(selected_color)
-        
-        # Initialize prediction horizon display
-        self.main_window.get_system_view().update_prediction_horizon(self.prediction_horizon_ms)
         
         logger.info("Initialization complete")
         return True
@@ -475,9 +486,6 @@ class DroneDetectionApp:
                 enriched_detections.append(enriched_det)
             else:
                 enriched_detections.append(det)
-        
-        # Update prediction horizon display
-        self.main_window.get_system_view().update_prediction_horizon(self.prediction_horizon_ms)
         
         # Calculate servo crosshair position (current PTU position in pixel coordinates)
         servo_crosshair = None
@@ -747,6 +755,49 @@ class DroneDetectionApp:
         """
         self.ptu_tracking_enabled = enable
         logger.info(f"PTU tracking {'enabled' if enable else 'disabled'}")
+    
+    def _on_test_mode_changed(self, test_mode: bool):
+        """Handle test mode change from UI."""
+        logger.info(f"Test mode changed to: {test_mode}")
+        
+        # Update Config
+        Config.TEST_OPTION = test_mode
+        
+        # Disconnect current camera if connected
+        if self.camera.is_connected():
+            self.camera.release()
+            self.main_window.get_system_view().update_camera_status(False)
+            self.is_running = False
+            self.frame_timer.stop()
+        
+        # Try to connect with new test mode setting
+        camera_connected = self.camera.connect()
+        if camera_connected:
+            self.main_window.get_system_view().update_camera_status(True)
+            source_type = "video file" if test_mode else "camera"
+            self.main_window.get_system_view().add_alert(
+                f"Camera reconnected - Test Mode: {test_mode} (reading from {source_type})", "INFO"
+            )
+            
+            # Initialize coordinate converter with camera dimensions
+            frame_width, frame_height = self.camera.get_frame_size()
+            if frame_width > 0 and frame_height > 0:
+                self.coordinate_converter = CoordinateConverter(
+                    image_width=frame_width,
+                    image_height=frame_height,
+                    horizontal_fov=60.0,
+                    vertical_fov=45.0
+                )
+                logger.info(f"Coordinate converter initialized: {frame_width}x{frame_height}")
+            
+            # Start frame processing
+            frame_interval = int(1000 / Config.UI_REFRESH_RATE)
+            self.frame_timer.start(frame_interval)
+            self.is_running = True
+        else:
+            self.main_window.get_system_view().add_alert(
+                f"Failed to connect to {'video file' if test_mode else 'camera'}", "ERROR"
+            )
 
 
 def main():
