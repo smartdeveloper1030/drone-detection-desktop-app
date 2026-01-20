@@ -84,15 +84,18 @@ class OperatorView(QWidget):
         # Draw on frame
         display_frame = self.draw_detections(frame.copy(), detections, predicted_point, servo_crosshair, prediction_horizon_ms)
         
+        # Convert BGR to RGB for QImage (no color conversion in QImage creation)
+        display_frame_rgb = cv2.cvtColor(display_frame, cv2.COLOR_BGR2RGB)
+        
         # Convert to QImage and display
-        height, width, channel = display_frame.shape
+        height, width, channel = display_frame_rgb.shape
         bytes_per_line = 3 * width
         
         # Store frame aspect ratio for proper scaling
         if self.frame_aspect_ratio is None or abs(self.frame_aspect_ratio - width/height) > 0.01:
             self.frame_aspect_ratio = width / height
         
-        q_image = QImage(display_frame.data, width, height, bytes_per_line, QImage.Format_RGB888).rgbSwapped()
+        q_image = QImage(display_frame_rgb.data, width, height, bytes_per_line, QImage.Format_RGB888)
         
         # Scale to fit label while maintaining camera frame aspect ratio
         # Use the actual frame dimensions to ensure proper scaling

@@ -44,7 +44,7 @@ class DetectionProcessingThread(threading.Thread):
     Handles the complete processing pipeline in the background.
     """
     
-    def __init__(self, detector, tracker, prediction_horizon_ms, signals, max_queue_size=1):
+    def __init__(self, detector, tracker, prediction_horizon_ms, signals, max_queue_size=1, detection_frame_skip=3):
         """
         Initialize the processing thread.
         
@@ -54,22 +54,25 @@ class DetectionProcessingThread(threading.Thread):
             prediction_horizon_ms: Prediction horizon in milliseconds
             signals: ProcessingResultSignals instance for thread-safe UI updates
             max_queue_size: Maximum frames in queue (drops frames if exceeded)
+            detection_frame_skip: Run detection every N frames (track/predict every frame)
         """
         super().__init__(daemon=True)
         self.detector = detector
         self.tracker = tracker
         self.prediction_horizon_ms = prediction_horizon_ms
         self.signals = signals
+        self.detection_frame_skip = detection_frame_skip
         self.frame_queue = Queue(maxsize=max_queue_size)
         self.is_running = False
         self.current_frame_id = 0
+        self.frame_counter = 0  # Internal counter for detection skipping
         self.processed_count = 0
         self.dropped_count = 0
         
     def run(self):
         """Main thread loop - continuously process frames."""
         self.is_running = True
-        logger.info("Detection processing thread started")
+        logger.info(f"Processing thread started (detection every {self.detection_frame_skip} frames, track/predict every frame)")
         
         while self.is_running:
             try:
@@ -79,46 +82,75 @@ class DetectionProcessingThread(threading.Thread):
                 except Empty:
                     continue
                 
-                # Step 1: Run detection
-                detections = self.detector.detect(frame)
+                self.frame_counter += 1
+                should_detect = (self.frame_counter % self.detection_frame_skip == 0)
                 
-                # Step 2: Update tracker with detections
-                tracks = self.tracker.update(detections, timestamp)
+                # Step 1: Run detection ONLY every N frames
+                if should_detect:
+                    detections = self.detector.detect(frame)
+                    # Step 2: Update tracker with detections
+                    tracks = self.tracker.update(detections, timestamp)
+                else:
+                    # Step 2: Track without new detections (predict only)
+                    detections = []  # No new detections
+                    tracks = self.tracker.predict_only(timestamp)
                 
-                # Step 3: Get prediction from tracker
+                # Step 3: Get prediction from tracker (ALWAYS, every frame)
                 predicted_point = self.tracker.get_primary_prediction(self.prediction_horizon_ms)
                 
                 # Step 4: Enrich detections with track information
+                # For frames without detection, use predicted positions from tracks
                 enriched_detections = []
-                for det in detections:
-                    # Find matching track for this detection
-                    matching_track = None
+                
+                if should_detect and detections:
+                    # Frame with detections: enrich with track info
+                    for det in detections:
+                        # Find matching track for this detection
+                        matching_track = None
+                        for track in tracks:
+                            # Match by position and class (within small tolerance for position)
+                            if (abs(track.detection.x - det.x) < 5 and 
+                                abs(track.detection.y - det.y) < 5 and
+                                track.detection.class_name == det.class_name):
+                                matching_track = track
+                                break
+                        
+                        if matching_track:
+                            # Create enriched detection with track info
+                            enriched_det = Detection(
+                                x=det.x,
+                                y=det.y,
+                                width=det.width,
+                                height=det.height,
+                                confidence=det.confidence,
+                                class_id=det.class_id,
+                                class_name=det.class_name,
+                                color_class=det.color_class,
+                                distance=det.distance,
+                                track_id=matching_track.track_id,
+                                velocity=matching_track.velocity
+                            )
+                            enriched_detections.append(enriched_det)
+                        else:
+                            enriched_detections.append(det)
+                else:
+                    # Frame without detection: use predicted positions from tracks
                     for track in tracks:
-                        # Match by position and class (within small tolerance for position)
-                        if (abs(track.detection.x - det.x) < 5 and 
-                            abs(track.detection.y - det.y) < 5 and
-                            track.detection.class_name == det.class_name):
-                            matching_track = track
-                            break
-                    
-                    if matching_track:
-                        # Create enriched detection with track info
+                        # Create detection from predicted track position
                         enriched_det = Detection(
-                            x=det.x,
-                            y=det.y,
-                            width=det.width,
-                            height=det.height,
-                            confidence=det.confidence,
-                            class_id=det.class_id,
-                            class_name=det.class_name,
-                            color_class=det.color_class,
-                            distance=det.distance,
-                            track_id=matching_track.track_id,
-                            velocity=matching_track.velocity
+                            x=track.detection.x,  # Predicted position
+                            y=track.detection.y,  # Predicted position
+                            width=track.detection.width,
+                            height=track.detection.height,
+                            confidence=track.detection.confidence * 0.8,  # Lower confidence for predicted
+                            class_id=track.detection.class_id,
+                            class_name=track.detection.class_name,
+                            color_class=track.detection.color_class,
+                            distance=track.detection.distance,
+                            track_id=track.track_id,
+                            velocity=track.velocity
                         )
                         enriched_detections.append(enriched_det)
-                    else:
-                        enriched_detections.append(det)
                 
                 # Step 5: Emit result signal for UI update (thread-safe)
                 self.signals.result_ready.emit(frame_id, enriched_detections, predicted_point, tracks)
@@ -360,7 +392,7 @@ class DroneDetectionApp:
         # Keep old detection_thread for backward compatibility during transition
         self.detection_thread = None
         
-        # Frame skipping
+        # Frame counter (for FPS tracking only - all frames sent to processing thread)
         self.frame_counter = 0
         
         # FPS tracking (separate for display and detection)
@@ -436,15 +468,16 @@ class DroneDetectionApp:
             self.tracker,
             self.prediction_horizon_ms,
             self.processing_signals,
-            max_queue_size=processing_queue_size
+            max_queue_size=processing_queue_size,
+            detection_frame_skip=Config.DETECTION_FRAME_SKIP
         )
         self.processing_thread.start()
-        logger.info(f"Processing thread started (detection + tracking + prediction, frame skip: {Config.DETECTION_FRAME_SKIP}, queue size: {processing_queue_size})")
+        logger.info(f"Processing thread started (detection every {Config.DETECTION_FRAME_SKIP} frames, track/predict every frame, queue size: {processing_queue_size})")
         
         # Start frame processing only if camera is connected
         if camera_connected:
             frame_interval = int(1000 / Config.UI_REFRESH_RATE)  # Convert to milliseconds
-            self.frame_timer.start(frame_interval)
+            self.frame_timer.start(16)
             self.is_running = True
         else:
             self.is_running = False
@@ -520,7 +553,8 @@ class DroneDetectionApp:
             self.tracker,
             self.prediction_horizon_ms,
             self.processing_signals,
-            max_queue_size=processing_queue_size
+            max_queue_size=processing_queue_size,
+            detection_frame_skip=Config.DETECTION_FRAME_SKIP
         )
         self.processing_thread.start()
         
@@ -674,6 +708,9 @@ class DroneDetectionApp:
     
     def process_frame(self):
         """Process a single frame - display immediately, detection runs asynchronously."""
+        # Timestamp: Start of frame processing
+        frame_process_start_time = time.time()
+        
         if not self.is_running:
             return
         
@@ -685,8 +722,16 @@ class DroneDetectionApp:
             return
         
         try:
+            # Timestamp: Before frame read
+            frame_read_start_time = time.time()
+            
             # Read frame
-            ret, frame = self.camera.read_frame()
+            ret, frame = self.camera.read_latest_frame()
+            
+            # Timestamp: After frame read
+            frame_read_end_time = time.time()
+            frame_read_duration = (frame_read_end_time - frame_read_start_time) * 1000  # Convert to ms
+            
             if not ret or frame is None:
                 # Video has ended or failed to read
                 if not self.camera.is_running:
@@ -710,6 +755,9 @@ class DroneDetectionApp:
         # Update camera status
         self.main_window.get_system_view().update_camera_status(True)
         
+        # Timestamp: Before UI update
+        ui_update_start_time = time.time()
+        
         # CRITICAL: Display raw frame IMMEDIATELY before any processing
         # This ensures the UI shows the latest frame as soon as it's captured
         # Processing results will update the frame later via signal callback
@@ -721,16 +769,45 @@ class DroneDetectionApp:
             self.prediction_horizon_ms
         )
         
-        # Queue frame for processing (detection + tracking + prediction) in background thread
-        # Frame skipping: only process every N frames
-        self.frame_counter += 1
-        should_process = (self.frame_counter % Config.DETECTION_FRAME_SKIP == 0)
+        # Timestamp: After UI update
+        ui_update_end_time = time.time()
+        ui_update_duration = (ui_update_end_time - ui_update_start_time) * 1000  # Convert to ms
         
-        if should_process and self.processing_thread:
+        # Timestamp: Before queueing frame
+        queue_start_time = time.time()
+        
+        # Queue frame for processing (detection + tracking + prediction) in background thread
+        # Send EVERY frame to processing thread (detection happens every N frames inside thread)
+        if self.processing_thread:
             current_time = time.time()
             # Add frame to processing queue (non-blocking)
+            # Processing thread will handle detection skipping internally
             self.processing_thread.add_frame(frame, current_time)
             self.detection_fps_count += 1
+        
+        # Timestamp: After queueing frame
+        queue_end_time = time.time()
+        queue_duration = (queue_end_time - queue_start_time) * 1000  # Convert to ms
+        
+        # Timestamp: End of frame processing
+        frame_process_end_time = time.time()
+        total_process_duration = (frame_process_end_time - frame_process_start_time) * 1000  # Convert to ms
+        
+        # Log processing timestamps (throttled to avoid spam)
+        if not hasattr(self, '_last_timestamp_log_time'):
+            self._last_timestamp_log_time = 0.0
+            self._timestamp_log_interval = 1.0  # Log every 1 second
+        
+        current_time = time.time()
+        if current_time - self._last_timestamp_log_time >= self._timestamp_log_interval:
+            logger.info(
+                f"Frame processing timestamps - "
+                f"Read: {frame_read_duration:.2f}ms, "
+                f"UI Update: {ui_update_duration:.2f}ms, "
+                f"Queue: {queue_duration:.2f}ms, "
+                f"Total: {total_process_duration:.2f}ms"
+            )
+            self._last_timestamp_log_time = current_time
         
         # Update FPS (separate tracking for display and detection)
         self.display_fps_count += 1

@@ -1,9 +1,10 @@
 """
-Camera module for handling video streams from RTSP or USB cameras.
+Camera module FIXED for low latency.
 """
 import cv2
 import numpy as np
 import os
+import time  # Add this
 from typing import Optional, Tuple
 from config import Config
 import logging
@@ -12,7 +13,7 @@ logger = logging.getLogger(__name__)
 
 
 class CameraModule:
-    """Handles camera/video input from various sources."""
+    """Handles camera/video input with minimal latency."""
     
     def __init__(self):
         """Initialize the camera module."""
@@ -23,138 +24,127 @@ class CameraModule:
         self.height = Config.CAMERA_HEIGHT
         self.frame_count = 0
         self.is_running = False
+        self.last_read_time = 0
+        self.read_interval = 1.0 / 30.0  # Target 30 FPS
     
     def connect(self) -> bool:
         """
-        Connect to the camera source.
-        
-        Returns:
-            bool: True if connection successful, False otherwise
+        Connect to the camera source with minimal latency settings.
         """
-        # Update source before connecting
         self.source = Config.get_camera_source()
         
         try:
             if Config.CAMERA_TYPE == "rtsp":
-                # RTSP stream with low-latency options
-                # Set environment variables for FFmpeg low-latency options
-                # These reduce RTSP stream buffering significantly
+                # RTSP with ultra-low latency options
                 os.environ['OPENCV_FFMPEG_CAPTURE_OPTIONS'] = (
-                    'rtsp_transport;tcp|'  # Use TCP instead of UDP for reliability
-                    'buffer_size;1|'  # Minimal buffer (1 frame)
-                    'max_delay;500000|'  # Max delay 500ms in microseconds
-                    'stimeout;2000000'  # Socket timeout 2s
+                    'rtsp_transport;tcp|'
+                    'buffer_size;102400|'  # 100KB buffer (not frames!)
+                    'max_delay;100000|'    # 100ms max delay
+                    'stimeout;1000000'     # 1s timeout
                 )
                 self.cap = cv2.VideoCapture(self.source, cv2.CAP_FFMPEG)
-                logger.info(f"Connecting to RTSP stream with low-latency options: {self.source}")
             elif Config.CAMERA_TYPE == "usb":
-                # USB camera
-                self.cap = cv2.VideoCapture(int(self.source))
-                logger.info(f"Connecting to USB camera at index {self.source}")
+                # USB camera with DirectShow on Windows for better control
+                if os.name == 'nt':  # Windows
+                    self.cap = cv2.VideoCapture(int(self.source), cv2.CAP_DSHOW)
+                else:
+                    self.cap = cv2.VideoCapture(int(self.source))
             else:
-                logger.error(f"Unknown camera type: {Config.CAMERA_TYPE}")
                 return False
             
             if not self.cap.isOpened():
-                logger.error("Failed to open camera source")
                 return False
             
-            # Set camera properties
+            # CRITICAL: Set properties in right order
+            # 1. Buffer size FIRST (some cameras need this first)
+            try:
+                self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+            except:
+                pass  # Some cameras ignore this
+            
+            # 2. Then resolution and FPS
             self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.width)
             self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.height)
-            self.cap.set(cv2.CAP_PROP_FPS, self.fps)
             
-            # Set buffer size to 1 for minimal latency (drop old frames)
-            # Buffer size of 1 means we always get the latest frame, dropping old ones
-            # This is critical for reducing latency and preventing frame buildup
+            # Don't set FPS for RTSP (let it use stream FPS)
+            if Config.CAMERA_TYPE == "usb":
+                self.cap.set(cv2.CAP_PROP_FPS, self.fps)
+            
+            # 3. Try to disable auto settings (reduces latency)
             try:
-                self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)  # Force buffer size to 1 for lowest latency
-                actual_buffer = self.cap.get(cv2.CAP_PROP_BUFFERSIZE)
-                logger.info(f"Camera buffer size set to {Config.CAMERA_BUFFER_SIZE} (actual: {actual_buffer})")
-            except Exception as e:
-                logger.warning(f"Could not set camera buffer size: {str(e)}")
+                self.cap.set(cv2.CAP_PROP_AUTOFOCUS, 0)
+                self.cap.set(cv2.CAP_PROP_AUTO_WB, 0)
+                self.cap.set(cv2.CAP_PROP_AUTO_EXPOSURE, 0)
+            except:
+                pass
             
-            # For RTSP: Set additional low-latency properties
-            if Config.CAMERA_TYPE == "rtsp":
-                try:
-                    # Try to set OpenCV's FFMPEG options for low latency
-                    # These may not work on all systems, but worth trying
-                    self.cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*'H264'))
-                except Exception as e:
-                    logger.debug(f"Could not set RTSP codec options: {str(e)}")
+            # Flush initial buffer
+            for _ in range(5):
+                self.cap.grab()
             
-            # Get actual properties
-            actual_width = int(self.cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-            actual_height = int(self.cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-            actual_fps = self.cap.get(cv2.CAP_PROP_FPS)
-            
-            # Store actual FPS for synchronization
-            self.actual_fps = actual_fps if actual_fps > 0 else self.fps
-            # If FPS is 0 or invalid, use configured FPS or default to 30
-            if self.actual_fps <= 0:
-                self.actual_fps = self.fps if self.fps > 0 else 30.0
-            
-            logger.info(f"Camera connected: {actual_width}x{actual_height} @ {self.actual_fps} FPS")
             self.is_running = True
+            logger.info(f"Camera connected: {self.width}x{self.height}")
             return True
             
         except Exception as e:
-            logger.error(f"Error connecting to camera: {str(e)}")
+            logger.error(f"Camera connect error: {e}")
             return False
     
-    def read_frame(self) -> Tuple[bool, Optional[np.ndarray]]:
+    def read_latest_frame(self) -> Tuple[bool, Optional[np.ndarray]]:
         """
-        Read a frame from the camera source.
-        For low latency: skip old buffered frames to get the latest one.
-        
-        Returns:
-            Tuple[bool, Optional[np.ndarray]]: (success, frame)
+        Get the ABSOLUTE latest frame with minimal latency.
+        This is the key fix for 3-second delay.
         """
         if not self.cap or not self.cap.isOpened():
             return False, None
         
+        start_time = time.perf_counter()
+        
         try:
-            # For low latency: skip old frames in buffer to get the latest frame
-            # This reduces latency by discarding stale frames
-            if Config.CAMERA_TYPE == "rtsp" and Config.CAMERA_BUFFER_SIZE > 1:
-                # Read and discard old frames, keeping only the latest
-                for _ in range(Config.CAMERA_BUFFER_SIZE - 1):
-                    ret_temp, _ = self.cap.read()
-                    if not ret_temp:
-                        break
+            # METHOD A: For 3-second delay, we need AGGRESSIVE buffer clearing
+            # Estimate: 3 seconds × 30 FPS = 90 frames backlogged
             
-            # Read the latest frame
-            ret, frame = self.cap.read()
+            # Step 1: Grab ALL buffered frames without decoding (FAST)
+            grab_count = 0
+            max_grabs = 100  # Enough for 3+ seconds at 30 FPS
+            
+            while grab_count < max_grabs:
+                grabbed = self.cap.grab()  # Returns True if frame grabbed
+                if not grabbed:
+                    break
+                grab_count += 1
+            
+            if grab_count > 10:
+                logger.warning(f"Cleared {grab_count} buffered frames! That was your 3-second delay.")
+            
+            # Step 2: Retrieve ONLY the latest frame
+            ret, frame = self.cap.retrieve()
+            
+            read_time = (time.perf_counter() - start_time) * 1000
             
             if ret:
+                # Log if we're still slow
+                if read_time > 50:  # >50ms is too slow
+                    logger.warning(f"Frame read took {read_time:.0f}ms")
+                
                 self.frame_count += 1
+                return True, frame
             else:
-                logger.warning("Failed to read frame from camera source")
-            
-            return ret, frame
+                # Fallback: normal read
+                ret, frame = self.cap.read()
+                return ret, frame
+                
         except Exception as e:
-            # Camera might have been released during read
-            logger.warning(f"Error reading frame (camera may have been released): {str(e)}")
+            logger.error(f"Error in read_latest_frame: {e}")
             return False, None
     
+    # Keep other methods the same...
     def get_fps(self) -> float:
-        """
-        Get the actual FPS of the video source.
-        
-        Returns:
-            float: FPS value
-        """
         if self.cap:
             return self.cap.get(cv2.CAP_PROP_FPS)
         return 0.0
     
     def get_frame_size(self) -> Tuple[int, int]:
-        """
-        Get the frame size.
-        
-        Returns:
-            Tuple[int, int]: (width, height)
-        """
         if self.cap:
             width = int(self.cap.get(cv2.CAP_PROP_FRAME_WIDTH))
             height = int(self.cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
@@ -162,19 +152,10 @@ class CameraModule:
         return (0, 0)
     
     def release(self):
-        """Release the camera resource."""
         if self.cap:
             self.cap.release()
             self.cap = None
         self.is_running = False
-        logger.info("Camera released")
     
     def is_connected(self) -> bool:
-        """
-        Check if camera is connected and running.
-        
-        Returns:
-            bool: True if connected, False otherwise
-        """
         return self.is_running and self.cap is not None and self.cap.isOpened()
-
