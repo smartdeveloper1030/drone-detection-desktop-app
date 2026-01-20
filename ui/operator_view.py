@@ -21,6 +21,10 @@ class OperatorView(QWidget):
         self.detections: List[Detection] = []
         self.predicted_point: Optional[tuple] = None  # (x, y)
         self.servo_crosshair: Optional[tuple] = None  # (x, y)
+        # Store original data for resize events
+        self.original_detections: List[Detection] = []
+        self.original_predicted_point: Optional[tuple] = None
+        self.original_servo_crosshair: Optional[tuple] = None
         self.fps = 0.0
         self.frame_count = 0
         self.fps_timer = QTimer()
@@ -28,15 +32,16 @@ class OperatorView(QWidget):
         self.fps_timer.start(1000)  # Update every second
         self.last_time = None
         self.frame_aspect_ratio: Optional[float] = None  # width/height ratio
+        self.target_aspect_ratio = 16.0 / 9.0  # 16:9 aspect ratio
         
     def setup_ui(self):
         """Set up the UI components."""
         layout = QVBoxLayout()
         
-        # Video display label - expand to fill available space
+        # Video display label - expand to fill available space with 16:9 aspect ratio
         self.video_label = QLabel()
         self.video_label.setAlignment(Qt.AlignCenter)
-        self.video_label.setMinimumSize(640, 480)
+        self.video_label.setMinimumSize(640, 360)  # 16:9 minimum size
         self.video_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         self.video_label.setStyleSheet("background-color: black;")
         self.video_label.setText("Waiting for video feed...")
@@ -76,49 +81,98 @@ class OperatorView(QWidget):
             servo_crosshair: Servo crosshair position (x, y)
             prediction_horizon_ms: Prediction horizon in milliseconds
         """
+        # Store original frame for resize events (will be cropped later)
         self.current_frame = frame.copy()
-        self.detections = detections
-        self.predicted_point = predicted_point
-        self.servo_crosshair = servo_crosshair
+        self.original_detections = detections
+        self.original_predicted_point = predicted_point
+        self.original_servo_crosshair = servo_crosshair
         
-        # Draw on frame
-        display_frame = self.draw_detections(frame.copy(), detections, predicted_point, servo_crosshair, prediction_horizon_ms)
+        # Calculate crop region to convert frame to 16:9 aspect ratio
+        original_height, original_width = frame.shape[:2]
+        frame_aspect = original_width / original_height
+        crop_x = 0
+        crop_y = 0
         
-        # Convert to QImage and display
+        # Crop frame to 16:9
+        if frame_aspect > self.target_aspect_ratio:
+            # Frame is wider than 16:9 - crop horizontally (center crop)
+            target_width = int(original_height * self.target_aspect_ratio)
+            crop_x = (original_width - target_width) // 2
+            cropped_frame = frame[:, crop_x:crop_x + target_width].copy()
+        elif frame_aspect < self.target_aspect_ratio:
+            # Frame is taller than 16:9 - crop vertically (center crop)
+            target_height = int(original_width / self.target_aspect_ratio)
+            crop_y = (original_height - target_height) // 2
+            cropped_frame = frame[crop_y:crop_y + target_height, :].copy()
+        else:
+            # Frame is already 16:9
+            cropped_frame = frame.copy()
+        
+        # Adjust detection coordinates to match cropped frame
+        adjusted_detections = []
+        for det in detections:
+            # Create a copy of the detection with adjusted coordinates
+            adjusted_det = Detection(
+                x=det.x - crop_x,
+                y=det.y - crop_y,
+                width=det.width,
+                height=det.height,
+                confidence=det.confidence,
+                class_id=det.class_id,
+                class_name=det.class_name,
+                color_class=det.color_class,
+                distance=det.distance,
+                track_id=det.track_id,
+                velocity=det.velocity
+            )
+            adjusted_detections.append(adjusted_det)
+        
+        # Adjust predicted point coordinates
+        adjusted_predicted_point = None
+        if predicted_point:
+            adjusted_predicted_point = (predicted_point[0] - crop_x, predicted_point[1] - crop_y)
+        
+        # Adjust servo crosshair coordinates
+        adjusted_servo_crosshair = None
+        if servo_crosshair:
+            adjusted_servo_crosshair = (servo_crosshair[0] - crop_x, servo_crosshair[1] - crop_y)
+        
+        # Draw detections on cropped frame
+        display_frame = self.draw_detections(
+            cropped_frame, 
+            adjusted_detections, 
+            adjusted_predicted_point, 
+            adjusted_servo_crosshair, 
+            prediction_horizon_ms
+        )
+        
+        # Update dimensions after cropping
         height, width, channel = display_frame.shape
         bytes_per_line = 3 * width
         
-        # Store frame aspect ratio for proper scaling
-        if self.frame_aspect_ratio is None or abs(self.frame_aspect_ratio - width/height) > 0.01:
-            self.frame_aspect_ratio = width / height
+        # Store frame aspect ratio (should be 16:9 now)
+        self.frame_aspect_ratio = self.target_aspect_ratio
         
         q_image = QImage(display_frame.data, width, height, bytes_per_line, QImage.Format_RGB888).rgbSwapped()
         
-        # Scale to fit label while maintaining camera frame aspect ratio
-        # Use the actual frame dimensions to ensure proper scaling
+        # Scale to fit label while maintaining 16:9 aspect ratio
         pixmap = QPixmap.fromImage(q_image)
         
         # Get available label size
         label_size = self.video_label.size()
         
-        # Calculate scaled size maintaining frame aspect ratio
-        if self.frame_aspect_ratio:
-            label_aspect = label_size.width() / label_size.height() if label_size.height() > 0 else 1.0
-            if label_aspect > self.frame_aspect_ratio:
-                # Label is wider than frame - fit to height
-                scaled_height = label_size.height()
-                scaled_width = int(scaled_height * self.frame_aspect_ratio)
-            else:
-                # Label is taller than frame - fit to width
-                scaled_width = label_size.width()
-                scaled_height = int(scaled_width / self.frame_aspect_ratio)
-        else:
-            # Fallback to label size
-            scaled_width = label_size.width()
+        # Calculate scaled size maintaining 16:9 aspect ratio
+        label_aspect = label_size.width() / label_size.height() if label_size.height() > 0 else self.target_aspect_ratio
+        if label_aspect > self.target_aspect_ratio:
+            # Label is wider than 16:9 - fit to height
             scaled_height = label_size.height()
+            scaled_width = int(scaled_height * self.target_aspect_ratio)
+        else:
+            # Label is taller than 16:9 - fit to width
+            scaled_width = label_size.width()
+            scaled_height = int(scaled_width / self.target_aspect_ratio)
         
-        # Scale to calculated dimensions (maintains frame aspect ratio)
-        # Using KeepAspectRatio as a safeguard against integer rounding errors
+        # Scale to calculated dimensions (maintains 16:9 aspect ratio)
         scaled_pixmap = pixmap.scaled(
             scaled_width,
             scaled_height,
@@ -343,11 +397,11 @@ class OperatorView(QWidget):
         """Handle resize event to update video display."""
         super().resizeEvent(event)
         if self.current_frame is not None:
-            # Redraw the frame at new size
+            # Redraw the frame at new size using stored original data
             self.update_frame(
                 self.current_frame,
-                self.detections,
-                self.predicted_point,
-                self.servo_crosshair
+                self.original_detections,
+                self.original_predicted_point,
+                self.original_servo_crosshair
             )
 
