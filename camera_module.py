@@ -78,9 +78,17 @@ class CameraModule:
             except:
                 pass
             
-            # Flush initial buffer
-            for _ in range(5):
-                self.cap.grab()
+            # Flush buffer once at startup to clear any stale frames
+            # This prevents decoding old frames during normal operation
+            flush_count = 0
+            max_flush = 100  # Enough for several seconds of backlog
+            while flush_count < max_flush:
+                if not self.cap.grab():
+                    break
+                flush_count += 1
+            
+            if flush_count > 0:
+                logger.info(f"Flushed {flush_count} stale frames from camera buffer at startup")
             
             self.is_running = True
             logger.info(f"Camera connected: {self.width}x{self.height}")
@@ -92,50 +100,42 @@ class CameraModule:
     
     def read_latest_frame(self) -> Tuple[bool, Optional[np.ndarray]]:
         """
-        Get the ABSOLUTE latest frame with minimal latency.
-        This is the key fix for 3-second delay.
+        Get the latest frame with minimal latency.
+        Uses grab() to clear buffer (fast, no decode) and retrieve() to get only the latest frame.
+        Buffer is flushed once at startup, so we only need to grab until we get the latest.
         """
         if not self.cap or not self.cap.isOpened():
             return False, None
         
-        start_time = time.perf_counter()
-        
         try:
-            # METHOD A: For 3-second delay, we need AGGRESSIVE buffer clearing
-            # Estimate: 3 seconds × 30 FPS = 90 frames backlogged
-            
-            # Step 1: Grab ALL buffered frames without decoding (FAST)
+            # Step 1: Grab frames in buffer without decoding (FAST)
+            # Since buffer was flushed at startup, we only need to grab until we get the latest
+            # Typically this means grabbing 0-2 frames (if any accumulated since last read)
             grab_count = 0
-            max_grabs = 100  # Enough for 3+ seconds at 30 FPS
+            max_grabs = 10  # Safety limit (should rarely need more than 1-2)
             
             while grab_count < max_grabs:
-                grabbed = self.cap.grab()  # Returns True if frame grabbed
+                grabbed = self.cap.grab()  # Fast: no decode, just advances buffer
                 if not grabbed:
+                    # No more frames in buffer, break
                     break
                 grab_count += 1
             
-            if grab_count > 10:
-                logger.warning(f"Cleared {grab_count} buffered frames! That was your 3-second delay.")
-            
-            # Step 2: Retrieve ONLY the latest frame
+            # Step 2: Retrieve and decode ONLY the latest frame
             ret, frame = self.cap.retrieve()
             
-            read_time = (time.perf_counter() - start_time) * 1000
-            
             if ret:
-                # Log if we're still slow
-                if read_time > 50:  # >50ms is too slow
-                    logger.warning(f"Frame read took {read_time:.0f}ms")
-                
                 self.frame_count += 1
                 return True, frame
             else:
-                # Fallback: normal read
+                # Fallback: try normal read if retrieve failed
                 ret, frame = self.cap.read()
+                if ret:
+                    self.frame_count += 1
                 return ret, frame
                 
         except Exception as e:
-            logger.error(f"Error in read_latest_frame: {e}")
+            logger.warning(f"Error reading latest frame (camera may have been released): {str(e)}")
             return False, None
     
     # Keep other methods the same...
