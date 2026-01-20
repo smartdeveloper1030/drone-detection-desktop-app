@@ -15,14 +15,6 @@
 2. **Create `.env` file:**
    - Copy the example: `cp .env.example .env` (or create manually)
    - Edit `.env` and configure your camera settings
-
-3. **For Test Mode (Recommended for first run):**
-   - Set `TEST_OPTION=true` in `.env`
-   - Place a test video file at the path specified in `TEST_VIDEO_PATH`
-   - Example: `test_videos/sample.mp4`
-
-4. **For Live Camera:**
-   - Set `TEST_OPTION=false` in `.env`
    - Configure `CAMERA_TYPE` (rtsp or usb)
    - For RTSP: Set `CAMERA_RTSP_URL`
    - For USB: Set `CAMERA_USB_INDEX` (usually 0)
@@ -58,10 +50,6 @@ On first run, YOLOv8 will automatically download the model file (~6MB for nano m
 - Check camera connection (USB) or network (RTSP)
 - Verify RTSP URL format: `rtsp://username:password@ip:port/path`
 - Try different USB camera index (0, 1, 2, etc.)
-
-### "Test video file not found"
-- Ensure `TEST_VIDEO_PATH` in `.env` points to an existing video file
-- Supported formats: .mp4, .avi, .mov
 
 ### "Failed to load YOLO model"
 - Check internet connection (first-time download)
