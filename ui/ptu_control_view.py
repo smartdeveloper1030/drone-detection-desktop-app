@@ -262,7 +262,6 @@ class PTUControlView(QWidget):
                 background-color: #1e1e1e;
                 color: #00ff00;
                 font-family: 'Courier New', monospace;
-                font-size: 10px;
             }
         """)
         layout.addWidget(self.command_history_text)
