@@ -24,6 +24,11 @@ class CameraModule:
         self.frame_count = 0
         self.is_running = False
         
+    def set_test_mode(self, test_mode: bool):
+        """Update test mode setting and source."""
+        self.is_test_mode = test_mode
+        self.source = Config.get_camera_source()
+    
     def connect(self) -> bool:
         """
         Connect to the camera or video source.
@@ -31,6 +36,10 @@ class CameraModule:
         Returns:
             bool: True if connection successful, False otherwise
         """
+        # Update test mode and source before connecting
+        self.is_test_mode = Config.TEST_OPTION
+        self.source = Config.get_camera_source()
+        
         try:
             if self.is_test_mode:
                 # Test mode: use video file

@@ -3,7 +3,7 @@ System View - System status, alerts, and configuration display.
 """
 from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, 
                              QTextEdit, QGroupBox, QGridLayout, QPushButton,
-                             QDoubleSpinBox, QSpinBox)
+                             QDoubleSpinBox, QSpinBox, QCheckBox)
 from PyQt5.QtCore import Qt, QTimer, pyqtSignal
 from PyQt5.QtGui import QColor, QPalette, QFont
 from datetime import datetime
@@ -19,6 +19,9 @@ class SystemView(QWidget):
     
     # Signal emitted when prediction horizon changes
     prediction_horizon_changed = pyqtSignal(int)  # Emits new horizon in milliseconds
+    
+    # Signal emitted when test mode changes
+    test_mode_changed = pyqtSignal(bool)  # Emits True if test mode enabled, False otherwise
     
     def __init__(self, parent=None):
         """Initialize the system view."""
@@ -74,22 +77,6 @@ class SystemView(QWidget):
         self.detection_status_label.setStyleSheet("color: yellow;")
         status_layout.addWidget(self.detection_status_label, 3, 1)
         
-        # Mode
-        mode_label = QLabel("Mode:")
-        mode_label.setStyleSheet("color: white;")
-        status_layout.addWidget(mode_label, 4, 0)
-        self.mode_label = QLabel("Drone/Balloon")
-        self.mode_label.setStyleSheet("color: white;")
-        status_layout.addWidget(self.mode_label, 4, 1)
-        
-        # Prediction horizon
-        prediction_label = QLabel("Prediction Horizon:")
-        prediction_label.setStyleSheet("color: white;")
-        status_layout.addWidget(prediction_label, 5, 0)
-        self.prediction_horizon_label = QLabel("0 ms")
-        self.prediction_horizon_label.setStyleSheet("color: white;")
-        status_layout.addWidget(self.prediction_horizon_label, 5, 1)
-        
         status_group.setLayout(status_layout)
         main_layout.addWidget(status_group)
         
@@ -100,10 +87,29 @@ class SystemView(QWidget):
         test_mode_label = QLabel("Test Mode:")
         test_mode_label.setStyleSheet("color: white;")
         config_layout.addWidget(test_mode_label, 0, 0)
-        test_mode_text = "Enabled" if Config.TEST_OPTION else "Disabled"
-        test_mode_value = QLabel(test_mode_text)
-        test_mode_value.setStyleSheet("color: yellow;" if Config.TEST_OPTION else "color: green;")
-        config_layout.addWidget(test_mode_value, 0, 1)
+        self.test_mode_checkbox = QCheckBox()
+        self.test_mode_checkbox.setChecked(Config.TEST_OPTION)
+        self.test_mode_checkbox.setStyleSheet("""
+            QCheckBox {
+                color: white;
+            }
+            QCheckBox::indicator {
+                width: 20px;
+                height: 20px;
+                border: 2px solid #555;
+                border-radius: 3px;
+                background-color: #3b3b3b;
+            }
+            QCheckBox::indicator:checked {
+                background-color: #00aa00;
+                border-color: #00ff00;
+            }
+            QCheckBox::indicator:hover {
+                border-color: #777;
+            }
+        """)
+        self.test_mode_checkbox.stateChanged.connect(self._on_test_mode_changed)
+        config_layout.addWidget(self.test_mode_checkbox, 0, 1)
         
         camera_type_label = QLabel("Camera Type:")
         camera_type_label.setStyleSheet("color: white;")
@@ -111,13 +117,6 @@ class SystemView(QWidget):
         camera_type_value = QLabel(Config.CAMERA_TYPE.upper())
         camera_type_value.setStyleSheet("color: white;")
         config_layout.addWidget(camera_type_value, 1, 1)
-        
-        yolo_model_label = QLabel("YOLO Model:")
-        yolo_model_label.setStyleSheet("color: white;")
-        config_layout.addWidget(yolo_model_label, 2, 0)
-        model_label = QLabel(Config.YOLO_MODEL_PATH)
-        model_label.setStyleSheet("color: white;")
-        config_layout.addWidget(model_label, 2, 1)
         
         conf_label = QLabel("Confidence Threshold:")
         conf_label.setStyleSheet("color: white;")
@@ -262,14 +261,6 @@ class SystemView(QWidget):
             self.detection_status_label.setText("Inactive")
             self.detection_status_label.setStyleSheet("color: yellow;")
     
-    def update_prediction_horizon(self, horizon_ms: int):
-        """Update prediction horizon."""
-        self.prediction_horizon_label.setText(f"{horizon_ms} ms")
-    
-    def update_mode(self, mode: str):
-        """Update detection mode."""
-        self.mode_label.setText(mode)
-    
     def update_estop_status(self, active: bool):
         """Update E-Stop status."""
         self.estop_status = active
@@ -337,4 +328,13 @@ class SystemView(QWidget):
         self.pred_horizon_spinbox.blockSignals(True)
         self.pred_horizon_spinbox.setValue(value)
         self.pred_horizon_spinbox.blockSignals(False)
+    
+    def _on_test_mode_changed(self, state: int):
+        """Handle test mode checkbox change."""
+        is_checked = (state == Qt.Checked)
+        self.test_mode_changed.emit(is_checked)
+    
+    def get_test_mode(self) -> bool:
+        """Get current test mode state."""
+        return self.test_mode_checkbox.isChecked()
 

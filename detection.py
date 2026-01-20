@@ -436,12 +436,14 @@ class DetectionModule:
                     if 'balloon' in class_name.lower():
                         color_class = self.color_classifier.classify_color(frame, (x1, y1, x2, y2))
                         
-                        # In balloon mode, only detect balloons of the selected color
+                        # In balloon mode, filter by selected color (unless "All" is selected)
                         if Config.DETECT_MODE.lower() == "balloon":
                             selected_color = getattr(Config, 'SELECTED_BALLOON_COLOR', 'red').lower()
-                            if color_class is None or color_class.lower() != selected_color:
-                                # Skip this detection - not the selected color
-                                continue
+                            # If "All" is selected, don't filter by color
+                            if selected_color != "all":
+                                if color_class is None or color_class.lower() != selected_color:
+                                    # Skip this detection - not the selected color
+                                    continue
                     
                     # Create detection object
                     detection = Detection(
