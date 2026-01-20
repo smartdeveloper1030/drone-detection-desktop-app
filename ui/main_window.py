@@ -76,8 +76,8 @@ class MainWindow(QMainWindow):
         toolbar_layout.addWidget(color_label)
         
         self.color_combo = QComboBox()
-        # Available colors from ColorClassifier
-        self.color_combo.addItems(["red", "white", "green", "blue", "black", "orange", "yellow"])
+        # Available colors from ColorClassifier, with "All" option first
+        self.color_combo.addItems(["All", "red", "white", "green", "blue", "black", "orange", "yellow"])
         self.color_combo.setCurrentText("red")  # Default to red
         self.color_combo.setStyleSheet("""
             QComboBox {
@@ -223,9 +223,13 @@ class MainWindow(QMainWindow):
     
     def set_color(self, color: str):
         """Set color programmatically."""
-        color_capitalized = color.capitalize()
-        if color_capitalized in ["Red", "White", "Green", "Blue", "Black", "Orange", "Yellow"]:
-            self.color_combo.setCurrentText(color_capitalized)
+        color_lower = color.lower()
+        if color_lower == "all":
+            self.color_combo.setCurrentText("All")
+        else:
+            color_capitalized = color.capitalize()
+            if color_capitalized in ["Red", "White", "Green", "Blue", "Black", "Orange", "Yellow"]:
+                self.color_combo.setCurrentText(color_capitalized)
     
     def get_current_mode(self) -> str:
         """Get current detection mode."""

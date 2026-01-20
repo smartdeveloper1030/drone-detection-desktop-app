@@ -6,7 +6,7 @@ import logging
 import time
 import threading
 from queue import Queue, Empty
-from typing import Tuple
+from typing import Tuple, Optional
 
 # IMPORTANT: Import torch BEFORE PyQt5 to avoid DLL conflicts on Windows
 # This must be done before any PyQt5 imports
@@ -228,6 +228,11 @@ class DroneDetectionApp:
         # Prediction horizon (in milliseconds)
         self.prediction_horizon_ms = Config.PREDICTION_HORIZON_MS
         
+        # Track last prediction distance for logging
+        self.last_prediction_distance: Optional[Tuple[float, float]] = None  # (distance_x, distance_y)
+        self.last_prediction_distance_log_time: float = 0.0
+        self.prediction_distance_log_interval: float = 1.0  # Log distance every 1 second
+        
     def initialize(self) -> bool:
         """
         Initialize all components.
@@ -326,8 +331,9 @@ class DroneDetectionApp:
         # If switching to balloon mode, initialize color selection
         if mode.lower() == "balloon":
             selected_color = getattr(Config, 'SELECTED_BALLOON_COLOR', 'red')
-            # Update blacklist to only include selected color
-            Config.BALLOON_BLACKLIST_COLORS = [selected_color]
+            # Update blacklist to only include selected color (unless "All" is selected)
+            if selected_color.lower() != "all":
+                Config.BALLOON_BLACKLIST_COLORS = [selected_color]
             # Ensure color selector is set correctly
             self.main_window.set_color(selected_color)
         
@@ -407,15 +413,25 @@ class DroneDetectionApp:
         Handle color selection change from UI.
         
         Args:
-            color: Selected color name
+            color: Selected color name (can be "All" or a specific color)
         """
+        color_lower = color.lower()
         logger.info(f"Balloon color selection changed to: {color}")
         # Update config
-        Config.SELECTED_BALLOON_COLOR = color
-        # Update blacklist colors to only include selected color
-        Config.BALLOON_BLACKLIST_COLORS = [color]
+        Config.SELECTED_BALLOON_COLOR = color_lower
+        
+        # If "All" is selected, don't update blacklist (detect all colors)
+        # Otherwise, update blacklist to only include selected color
+        if color_lower == "all":
+            # Don't filter by color - detect all balloons
+            # Keep existing blacklist for threat detection purposes
+            pass
+        else:
+            # Update blacklist colors to only include selected color
+            Config.BALLOON_BLACKLIST_COLORS = [color_lower]
+        
         self.main_window.get_system_view().add_alert(
-            f"Balloon detection color set to: {color.capitalize()}", "INFO"
+            f"Balloon detection color set to: {color}", "INFO"
         )
     
     def process_frame(self):
@@ -453,6 +469,37 @@ class DroneDetectionApp:
         current_time = time.time()
         tracks = self.tracker.update(detections, current_time)
         predicted_point = self.tracker.get_primary_prediction(self.prediction_horizon_ms)
+        
+        # Calculate and log distance between prediction point and camera center
+        if predicted_point and frame is not None:
+            # Get camera center (frame center)
+            frame_height, frame_width = frame.shape[:2]
+            camera_center_x = frame_width / 2.0
+            camera_center_y = frame_height / 2.0
+            
+            # Calculate distances in x and y directions
+            pred_x, pred_y = predicted_point
+            distance_x = pred_x - camera_center_x
+            distance_y = pred_y - camera_center_y
+            
+            # Log distances to alert log (throttled to avoid spam)
+            distance_changed = False
+            if self.last_prediction_distance is None:
+                distance_changed = True
+            else:
+                # Log if distance changed significantly (more than 10 pixels in either direction) or enough time passed
+                last_dist_x, last_dist_y = self.last_prediction_distance
+                if abs(distance_x - last_dist_x) > 10.0 or abs(distance_y - last_dist_y) > 10.0:
+                    distance_changed = True
+            
+            time_since_last_log = current_time - self.last_prediction_distance_log_time
+            if distance_changed or time_since_last_log >= self.prediction_distance_log_interval:
+                self.main_window.get_system_view().add_alert(
+                    f"Prediction distance from center: X={distance_x:.1f} pixels, Y={distance_y:.1f} pixels",
+                    "INFO"
+                )
+                self.last_prediction_distance = (distance_x, distance_y)
+                self.last_prediction_distance_log_time = current_time
         
         # Enrich detections with track information
         # Create a mapping from detection to track by comparing detection objects
