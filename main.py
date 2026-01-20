@@ -477,7 +477,7 @@ class DroneDetectionApp:
         # Start frame processing only if camera is connected
         if camera_connected:
             frame_interval = int(1000 / Config.UI_REFRESH_RATE)  # Convert to milliseconds
-            self.frame_timer.start(16)
+            self.frame_timer.start(frame_interval)
             self.is_running = True
         else:
             self.is_running = False
