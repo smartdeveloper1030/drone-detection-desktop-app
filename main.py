@@ -577,8 +577,8 @@ class DroneDetectionApp:
             logger.error("Initialization failed")
             return 1
         
-        # Show main window
-        self.main_window.show()
+        # Show main window maximized (shows taskbar and toolbar)
+        self.main_window.showMaximized()
         
         # Add startup alert
         self.main_window.get_system_view().add_alert(

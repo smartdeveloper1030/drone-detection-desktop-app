@@ -1,7 +1,7 @@
 """
 Operator View - Live video feed with detection visualization.
 """
-from PyQt5.QtWidgets import QWidget, QVBoxLayout, QLabel, QHBoxLayout
+from PyQt5.QtWidgets import QWidget, QVBoxLayout, QLabel, QHBoxLayout, QSizePolicy
 from PyQt5.QtCore import Qt, QTimer, pyqtSignal
 from PyQt5.QtGui import QImage, QPixmap, QPainter, QPen, QColor, QFont
 import cv2
@@ -27,18 +27,20 @@ class OperatorView(QWidget):
         self.fps_timer.timeout.connect(self.update_fps_display)
         self.fps_timer.start(1000)  # Update every second
         self.last_time = None
+        self.frame_aspect_ratio: Optional[float] = None  # width/height ratio
         
     def setup_ui(self):
         """Set up the UI components."""
         layout = QVBoxLayout()
         
-        # Video display label
+        # Video display label - expand to fill available space
         self.video_label = QLabel()
         self.video_label.setAlignment(Qt.AlignCenter)
         self.video_label.setMinimumSize(640, 480)
+        self.video_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         self.video_label.setStyleSheet("background-color: black;")
         self.video_label.setText("Waiting for video feed...")
-        layout.addWidget(self.video_label)
+        layout.addWidget(self.video_label, stretch=1)  # Allow video to expand
         
         # Info bar
         info_layout = QHBoxLayout()
@@ -85,12 +87,41 @@ class OperatorView(QWidget):
         # Convert to QImage and display
         height, width, channel = display_frame.shape
         bytes_per_line = 3 * width
+        
+        # Store frame aspect ratio for proper scaling
+        if self.frame_aspect_ratio is None or abs(self.frame_aspect_ratio - width/height) > 0.01:
+            self.frame_aspect_ratio = width / height
+        
         q_image = QImage(display_frame.data, width, height, bytes_per_line, QImage.Format_RGB888).rgbSwapped()
         
-        # Scale to fit label while maintaining aspect ratio
+        # Scale to fit label while maintaining camera frame aspect ratio
+        # Use the actual frame dimensions to ensure proper scaling
         pixmap = QPixmap.fromImage(q_image)
+        
+        # Get available label size
+        label_size = self.video_label.size()
+        
+        # Calculate scaled size maintaining frame aspect ratio
+        if self.frame_aspect_ratio:
+            label_aspect = label_size.width() / label_size.height() if label_size.height() > 0 else 1.0
+            if label_aspect > self.frame_aspect_ratio:
+                # Label is wider than frame - fit to height
+                scaled_height = label_size.height()
+                scaled_width = int(scaled_height * self.frame_aspect_ratio)
+            else:
+                # Label is taller than frame - fit to width
+                scaled_width = label_size.width()
+                scaled_height = int(scaled_width / self.frame_aspect_ratio)
+        else:
+            # Fallback to label size
+            scaled_width = label_size.width()
+            scaled_height = label_size.height()
+        
+        # Scale to calculated dimensions (maintains frame aspect ratio)
+        # Using KeepAspectRatio as a safeguard against integer rounding errors
         scaled_pixmap = pixmap.scaled(
-            self.video_label.size(),
+            scaled_width,
+            scaled_height,
             Qt.KeepAspectRatio,
             Qt.SmoothTransformation
         )
