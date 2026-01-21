@@ -25,6 +25,12 @@ class MainWindow(QMainWindow):
         self.setWindowTitle("Drone Detection System")
         self.setGeometry(100, 100, 1200, 500)  # Wider window for side-by-side layout
         
+        # Disable animations for lower latency if configured
+        if Config.UI_DISABLE_ANIMATIONS:
+            # Disable window animations and effects
+            self.setAttribute(Qt.WA_TranslucentBackground, False)
+            self.setUpdatesEnabled(True)  # Keep updates enabled but disable animations
+        
         # Create central widget with horizontal layout
         central_widget = QWidget()
         main_layout = QVBoxLayout()

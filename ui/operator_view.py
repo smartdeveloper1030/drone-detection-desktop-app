@@ -87,73 +87,17 @@ class OperatorView(QWidget):
         self.original_predicted_point = predicted_point
         self.original_servo_crosshair = servo_crosshair
         
-        # Calculate crop region to convert frame to 16:9 aspect ratio
-        original_height, original_width = frame.shape[:2]
-        frame_aspect = original_width / original_height
-        crop_x = 0
-        crop_y = 0
+        # Draw on frame
+        display_frame = self.draw_detections(frame.copy(), detections, predicted_point, servo_crosshair, prediction_horizon_ms)
         
-        # Crop frame to 16:9
-        if frame_aspect > self.target_aspect_ratio:
-            # Frame is wider than 16:9 - crop horizontally (center crop)
-            target_width = int(original_height * self.target_aspect_ratio)
-            crop_x = (original_width - target_width) // 2
-            cropped_frame = frame[:, crop_x:crop_x + target_width].copy()
-        elif frame_aspect < self.target_aspect_ratio:
-            # Frame is taller than 16:9 - crop vertically (center crop)
-            target_height = int(original_width / self.target_aspect_ratio)
-            crop_y = (original_height - target_height) // 2
-            cropped_frame = frame[crop_y:crop_y + target_height, :].copy()
-        else:
-            # Frame is already 16:9
-            cropped_frame = frame.copy()
-        
-        # Adjust detection coordinates to match cropped frame
-        adjusted_detections = []
-        for det in detections:
-            # Create a copy of the detection with adjusted coordinates
-            adjusted_det = Detection(
-                x=det.x - crop_x,
-                y=det.y - crop_y,
-                width=det.width,
-                height=det.height,
-                confidence=det.confidence,
-                class_id=det.class_id,
-                class_name=det.class_name,
-                color_class=det.color_class,
-                distance=det.distance,
-                track_id=det.track_id,
-                velocity=det.velocity
-            )
-            adjusted_detections.append(adjusted_det)
-        
-        # Adjust predicted point coordinates
-        adjusted_predicted_point = None
-        if predicted_point:
-            adjusted_predicted_point = (predicted_point[0] - crop_x, predicted_point[1] - crop_y)
-        
-        # Adjust servo crosshair coordinates
-        adjusted_servo_crosshair = None
-        if servo_crosshair:
-            adjusted_servo_crosshair = (servo_crosshair[0] - crop_x, servo_crosshair[1] - crop_y)
-        
-        # Draw detections on cropped frame
-        display_frame = self.draw_detections(
-            cropped_frame, 
-            adjusted_detections, 
-            adjusted_predicted_point, 
-            adjusted_servo_crosshair, 
-            prediction_horizon_ms
-        )
-        
-        # Update dimensions after cropping
+        # Convert to QImage and display
         height, width, channel = display_frame.shape
         bytes_per_line = 3 * width
         
         # Store frame aspect ratio (should be 16:9 now)
         self.frame_aspect_ratio = self.target_aspect_ratio
         
-        q_image = QImage(display_frame.data, width, height, bytes_per_line, QImage.Format_RGB888).rgbSwapped()
+        q_image = QImage(display_frame_rgb.data, width, height, bytes_per_line, QImage.Format_RGB888)
         
         # Scale to fit label while maintaining 16:9 aspect ratio
         pixmap = QPixmap.fromImage(q_image)

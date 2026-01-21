@@ -13,7 +13,7 @@ from typing import Tuple, Optional
 import torch
 
 from PyQt5.QtWidgets import QApplication
-from PyQt5.QtCore import QTimer
+from PyQt5.QtCore import QTimer, pyqtSignal, QObject
 import cv2
 import numpy as np
 
@@ -33,10 +33,179 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
+class ProcessingResultSignals(QObject):
+    """Signals for thread-safe UI updates from processing thread."""
+    result_ready = pyqtSignal(int, list, object, list)  # frame_id, enriched_detections, predicted_point, tracks
+
+
+class DetectionProcessingThread(threading.Thread):
+    """
+    Thread for running detection, tracking, and prediction.
+    Handles the complete processing pipeline in the background.
+    """
+    
+    def __init__(self, detector, tracker, prediction_horizon_ms, signals, max_queue_size=1, detection_frame_skip=3):
+        """
+        Initialize the processing thread.
+        
+        Args:
+            detector: DetectionModule instance
+            tracker: Tracker instance
+            prediction_horizon_ms: Prediction horizon in milliseconds
+            signals: ProcessingResultSignals instance for thread-safe UI updates
+            max_queue_size: Maximum frames in queue (drops frames if exceeded)
+            detection_frame_skip: Run detection every N frames (track/predict every frame)
+        """
+        super().__init__(daemon=True)
+        self.detector = detector
+        self.tracker = tracker
+        self.prediction_horizon_ms = prediction_horizon_ms
+        self.signals = signals
+        self.detection_frame_skip = detection_frame_skip
+        self.frame_queue = Queue(maxsize=max_queue_size)
+        self.is_running = False
+        self.current_frame_id = 0
+        self.frame_counter = 0  # Internal counter for detection skipping
+        self.processed_count = 0
+        self.dropped_count = 0
+        
+    def run(self):
+        """Main thread loop - continuously process frames."""
+        self.is_running = True
+        logger.info(f"Processing thread started (detection every {self.detection_frame_skip} frames, track/predict every frame)")
+        
+        while self.is_running:
+            try:
+                # Get frame from queue (blocking with timeout)
+                try:
+                    frame, frame_id, timestamp = self.frame_queue.get(timeout=0.1)
+                except Empty:
+                    continue
+                
+                self.frame_counter += 1
+                should_detect = (self.frame_counter % self.detection_frame_skip == 0)
+                
+                # Step 1: Run detection ONLY every N frames
+                if should_detect:
+                    detections = self.detector.detect(frame)
+                    # Step 2: Update tracker with detections
+                    tracks = self.tracker.update(detections, timestamp)
+                else:
+                    # Step 2: Track without new detections (predict only)
+                    detections = []  # No new detections
+                    tracks = self.tracker.predict_only(timestamp)
+                
+                # Step 3: Get prediction from tracker (ALWAYS, every frame)
+                predicted_point = self.tracker.get_primary_prediction(self.prediction_horizon_ms)
+                
+                # Step 4: Enrich detections with track information
+                # For frames without detection, use predicted positions from tracks
+                enriched_detections = []
+                
+                if should_detect and detections:
+                    # Frame with detections: enrich with track info
+                    for det in detections:
+                        # Find matching track for this detection
+                        matching_track = None
+                        for track in tracks:
+                            # Match by position and class (within small tolerance for position)
+                            if (abs(track.detection.x - det.x) < 5 and 
+                                abs(track.detection.y - det.y) < 5 and
+                                track.detection.class_name == det.class_name):
+                                matching_track = track
+                                break
+                        
+                        if matching_track:
+                            # Create enriched detection with track info
+                            enriched_det = Detection(
+                                x=det.x,
+                                y=det.y,
+                                width=det.width,
+                                height=det.height,
+                                confidence=det.confidence,
+                                class_id=det.class_id,
+                                class_name=det.class_name,
+                                color_class=det.color_class,
+                                distance=det.distance,
+                                track_id=matching_track.track_id,
+                                velocity=matching_track.velocity
+                            )
+                            enriched_detections.append(enriched_det)
+                        else:
+                            enriched_detections.append(det)
+                else:
+                    # Frame without detection: use predicted positions from tracks
+                    for track in tracks:
+                        # Create detection from predicted track position
+                        enriched_det = Detection(
+                            x=track.detection.x,  # Predicted position
+                            y=track.detection.y,  # Predicted position
+                            width=track.detection.width,
+                            height=track.detection.height,
+                            confidence=track.detection.confidence * 0.8,  # Lower confidence for predicted
+                            class_id=track.detection.class_id,
+                            class_name=track.detection.class_name,
+                            color_class=track.detection.color_class,
+                            distance=track.detection.distance,
+                            track_id=track.track_id,
+                            velocity=track.velocity
+                        )
+                        enriched_detections.append(enriched_det)
+                
+                # Step 5: Emit result signal for UI update (thread-safe)
+                self.signals.result_ready.emit(frame_id, enriched_detections, predicted_point, tracks)
+                
+                self.processed_count += 1
+                self.frame_queue.task_done()
+                
+            except Exception as e:
+                logger.error(f"Error in processing thread: {str(e)}")
+                if not self.is_running:
+                    break
+        
+        logger.info(f"Processing thread stopped. Processed {self.processed_count} frames, dropped {self.dropped_count}")
+    
+    def add_frame(self, frame: np.ndarray, timestamp: float) -> bool:
+        """
+        Add frame to processing queue (non-blocking).
+        For low latency: always keep only the latest frame.
+        
+        Args:
+            frame: Frame to process
+            timestamp: Current timestamp for tracking
+            
+        Returns:
+            bool: True if frame was added, False if queue was full (frame dropped)
+        """
+        self.current_frame_id += 1
+        
+        # For low latency: always clear old frames and keep only the latest
+        while not self.frame_queue.empty():
+            try:
+                self.frame_queue.get_nowait()
+                self.dropped_count += 1
+            except Empty:
+                break
+        
+        try:
+            # Copy frame to avoid issues if frame is modified elsewhere
+            self.frame_queue.put_nowait((frame.copy(), self.current_frame_id, timestamp))
+            return True
+        except:
+            self.dropped_count += 1
+            return False
+    
+    def stop(self):
+        """Stop the processing thread."""
+        self.is_running = False
+        logger.info("Stopping processing thread...")
+
+
 class DetectionThread(threading.Thread):
     """
     Separate thread for running detection to prevent UI blocking.
     Uses non-blocking queue to drop frames if detection is too slow.
+    DEPRECATED: Use DetectionProcessingThread instead.
     """
     
     def __init__(self, detector, max_queue_size=2):
@@ -96,6 +265,7 @@ class DetectionThread(threading.Thread):
     def add_frame(self, frame: np.ndarray) -> bool:
         """
         Add frame to detection queue (non-blocking).
+        For low latency: always keep only the latest frame.
         
         Args:
             frame: Frame to process
@@ -105,15 +275,17 @@ class DetectionThread(threading.Thread):
         """
         self.current_frame_id += 1
         
-        # If queue is full, remove oldest frame
-        if self.frame_queue.full():
+        # For low latency: always clear old frames and keep only the latest
+        # This ensures we process the most recent frame, not stale ones
+        while not self.frame_queue.empty():
             try:
                 self.frame_queue.get_nowait()
                 self.dropped_count += 1
             except Empty:
-                pass
+                break
         
         try:
+            # Copy frame to avoid issues if frame is modified elsewhere
             self.frame_queue.put_nowait((frame.copy(), self.current_frame_id))
             return True
         except:
@@ -206,10 +378,21 @@ class DroneDetectionApp:
         self.frame_timer = QTimer()
         self.frame_timer.timeout.connect(self.process_frame)
         
-        # Detection threading
+        # Processing threading (detection, tracking, prediction)
+        self.processing_thread = None
+        self.processing_signals = ProcessingResultSignals()
+        self.processing_signals.result_ready.connect(self._on_processing_result)
+        
+        # Latest processing results
+        self.latest_enriched_detections = []
+        self.latest_predicted_point = None
+        self.latest_tracks = []
+        self.last_processing_frame_id = -1
+        
+        # Keep old detection_thread for backward compatibility during transition
         self.detection_thread = None
         
-        # Frame skipping
+        # Frame counter (for FPS tracking only - all frames sent to processing thread)
         self.frame_counter = 0
         
         # FPS tracking (separate for display and detection)
@@ -277,13 +460,19 @@ class DroneDetectionApp:
         # Update available PTU ports
         self._update_ptu_ports()
         
-        # Start detection thread
-        self.detection_thread = DetectionThread(
+        # Start processing thread (detection + tracking + prediction) with minimal queue for low latency
+        # Queue size of 1 ensures we always process the latest frame, dropping old ones
+        processing_queue_size = max(1, Config.DETECTION_QUEUE_SIZE)  # At least 1
+        self.processing_thread = DetectionProcessingThread(
             self.detector,
-            max_queue_size=Config.DETECTION_QUEUE_SIZE
+            self.tracker,
+            self.prediction_horizon_ms,
+            self.processing_signals,
+            max_queue_size=processing_queue_size,
+            detection_frame_skip=Config.DETECTION_FRAME_SKIP
         )
-        self.detection_thread.start()
-        logger.info(f"Detection thread started (frame skip: {Config.DETECTION_FRAME_SKIP}, queue size: {Config.DETECTION_QUEUE_SIZE})")
+        self.processing_thread.start()
+        logger.info(f"Processing thread started (detection every {Config.DETECTION_FRAME_SKIP} frames, track/predict every frame, queue size: {processing_queue_size})")
         
         # Start frame processing only if camera is connected
         if camera_connected:
@@ -328,16 +517,18 @@ class DroneDetectionApp:
             # Ensure color selector is set correctly
             self.main_window.set_color(selected_color)
         
-        # Stop current detection thread
-        if self.detection_thread and self.detection_thread.is_alive():
-            logger.info("Stopping current detection thread...")
-            self.detection_thread.stop()
-            self.detection_thread.join(timeout=2.0)
-            self.detection_thread = None
+        # Stop current processing thread
+        if self.processing_thread and self.processing_thread.is_alive():
+            logger.info("Stopping current processing thread...")
+            self.processing_thread.stop()
+            self.processing_thread.join(timeout=2.0)
+            self.processing_thread = None
         
-        # Clear current detections
-        self.latest_detections = []
-        self.last_detection_frame_id = -1
+        # Clear current results
+        self.latest_enriched_detections = []
+        self.latest_predicted_point = None
+        self.latest_tracks = []
+        self.last_processing_frame_id = -1
         
         # Reload model with new mode
         logger.info(f"Reloading model for {mode} mode...")
@@ -355,12 +546,17 @@ class DroneDetectionApp:
         # Clear tracker when mode changes (objects may be different)
         self.tracker.clear()
         
-        # Restart detection thread
-        self.detection_thread = DetectionThread(
+        # Restart processing thread
+        processing_queue_size = max(1, Config.DETECTION_QUEUE_SIZE)
+        self.processing_thread = DetectionProcessingThread(
             self.detector,
-            max_queue_size=Config.DETECTION_QUEUE_SIZE
+            self.tracker,
+            self.prediction_horizon_ms,
+            self.processing_signals,
+            max_queue_size=processing_queue_size,
+            detection_frame_skip=Config.DETECTION_FRAME_SKIP
         )
-        self.detection_thread.start()
+        self.processing_thread.start()
         
         # Update system view
         self.main_window.get_system_view().add_alert(
@@ -393,6 +589,9 @@ class DroneDetectionApp:
         """
         logger.info(f"Prediction horizon changed to: {horizon_ms} ms")
         self.prediction_horizon_ms = horizon_ms
+        # Update processing thread's prediction horizon
+        if self.processing_thread:
+            self.processing_thread.prediction_horizon_ms = horizon_ms
         # Update config for persistence
         Config.PREDICTION_HORIZON_MS = horizon_ms
         self.main_window.get_system_view().add_alert(
@@ -425,8 +624,93 @@ class DroneDetectionApp:
             f"Balloon detection color set to: {color}", "INFO"
         )
     
+    def _on_processing_result(self, frame_id: int, enriched_detections: list, predicted_point: Optional[tuple], tracks: list):
+        """
+        Handle processing results from background thread (thread-safe callback).
+        Updates UI with detection, tracking, and prediction results.
+        
+        Args:
+            frame_id: Frame ID that was processed
+            enriched_detections: List of enriched detections with track info
+            predicted_point: Predicted point (x, y) or None
+            tracks: List of active tracks
+        """
+        # Update cached results
+        self.latest_enriched_detections = enriched_detections
+        self.latest_predicted_point = predicted_point
+        self.latest_tracks = tracks
+        self.last_processing_frame_id = frame_id
+        
+        # Update detection status
+        self.main_window.get_system_view().update_detection_status(len(enriched_detections) > 0)
+        
+        # Check for blacklist detections and add alerts
+        blacklist_detections = self.detector.get_blacklist_detections(enriched_detections)
+        if blacklist_detections:
+            # Threat detected
+            det = blacklist_detections[0]
+            color_info = f" ({det.color_class})" if det.color_class else ""
+            self.main_window.get_system_view().add_alert(
+                f"THREAT DETECTED: {det.class_name}{color_info} at ({det.x}, {det.y})",
+                "THREAT"
+            )
+        elif len(enriched_detections) > 0 and len(blacklist_detections) == 0:
+            # Only whitelist detected
+            det = enriched_detections[0]
+            self.main_window.get_system_view().add_alert(
+                f"Whitelist object detected: {det.class_name}",
+                "INFO"
+            )
+        
+        # Calculate and log distance between prediction point and camera center
+        if predicted_point and self.main_window.get_operator_view().current_frame is not None:
+            frame = self.main_window.get_operator_view().current_frame
+            frame_height, frame_width = frame.shape[:2]
+            camera_center_x = frame_width / 2.0
+            camera_center_y = frame_height / 2.0
+            
+            pred_x, pred_y = predicted_point
+            distance_x = pred_x - camera_center_x
+            distance_y = pred_y - camera_center_y
+            
+            # Log distances to alert log (throttled to avoid spam)
+            distance_changed = False
+            if self.last_prediction_distance is None:
+                distance_changed = True
+            else:
+                last_dist_x, last_dist_y = self.last_prediction_distance
+                if abs(distance_x - last_dist_x) > 10.0 or abs(distance_y - last_dist_y) > 10.0:
+                    distance_changed = True
+            
+            current_time = time.time()
+            time_since_last_log = current_time - self.last_prediction_distance_log_time
+            if distance_changed or time_since_last_log >= self.prediction_distance_log_interval:
+                self.main_window.get_system_view().add_alert(
+                    f"Prediction distance from center: X={distance_x:.1f} pixels, Y={distance_y:.1f} pixels",
+                    "INFO"
+                )
+                self.last_prediction_distance = (distance_x, distance_y)
+                self.last_prediction_distance_log_time = current_time
+        
+        # Update UI with latest results (will use current frame from operator view)
+        if self.main_window.get_operator_view().current_frame is not None:
+            frame = self.main_window.get_operator_view().current_frame
+            servo_crosshair = None  # Can be calculated if needed
+            
+            # Update operator view with enriched detections and predictions
+            self.main_window.get_operator_view().update_frame(
+                frame,
+                enriched_detections,
+                predicted_point,
+                servo_crosshair,
+                self.prediction_horizon_ms
+            )
+    
     def process_frame(self):
         """Process a single frame - display immediately, detection runs asynchronously."""
+        # Timestamp: Start of frame processing
+        frame_process_start_time = time.time()
+        
         if not self.is_running:
             return
         
@@ -438,8 +722,16 @@ class DroneDetectionApp:
             return
         
         try:
+            # Timestamp: Before frame read
+            frame_read_start_time = time.time()
+            
             # Read frame
-            ret, frame = self.camera.read_frame()
+            ret, frame = self.camera.read_latest_frame()
+            
+            # Timestamp: After frame read
+            frame_read_end_time = time.time()
+            frame_read_duration = (frame_read_end_time - frame_read_start_time) * 1000  # Convert to ms
+            
             if not ret or frame is None:
                 # Video has ended or failed to read
                 if not self.camera.is_running:
@@ -463,140 +755,59 @@ class DroneDetectionApp:
         # Update camera status
         self.main_window.get_system_view().update_camera_status(True)
         
-        # CRITICAL: Display frame immediately with latest available detections (don't wait for detection)
-        # Get latest detection results (non-blocking, may be from older frame)
-        detections = self.latest_detections  # Use cached detections immediately
+        # Timestamp: Before UI update
+        ui_update_start_time = time.time()
         
-        # Update tracker with current detections and get predictions
-        current_time = time.time()
-        tracks = self.tracker.update(detections, current_time)
-        predicted_point = self.tracker.get_primary_prediction(self.prediction_horizon_ms)
-        
-        # Calculate and log distance between prediction point and camera center
-        if predicted_point and frame is not None:
-            # Get camera center (frame center)
-            frame_height, frame_width = frame.shape[:2]
-            camera_center_x = frame_width / 2.0
-            camera_center_y = frame_height / 2.0
-            
-            # Calculate distances in x and y directions
-            pred_x, pred_y = predicted_point
-            distance_x = pred_x - camera_center_x
-            distance_y = pred_y - camera_center_y
-            
-            # Log distances to alert log (throttled to avoid spam)
-            distance_changed = False
-            if self.last_prediction_distance is None:
-                distance_changed = True
-            else:
-                # Log if distance changed significantly (more than 10 pixels in either direction) or enough time passed
-                last_dist_x, last_dist_y = self.last_prediction_distance
-                if abs(distance_x - last_dist_x) > 10.0 or abs(distance_y - last_dist_y) > 10.0:
-                    distance_changed = True
-            
-            time_since_last_log = current_time - self.last_prediction_distance_log_time
-            if distance_changed or time_since_last_log >= self.prediction_distance_log_interval:
-                self.main_window.get_system_view().add_alert(
-                    f"Prediction distance from center: X={distance_x:.1f} pixels, Y={distance_y:.1f} pixels",
-                    "INFO"
-                )
-                self.last_prediction_distance = (distance_x, distance_y)
-                self.last_prediction_distance_log_time = current_time
-        
-        # Enrich detections with track information
-        # Create a mapping from detection to track by comparing detection objects
-        enriched_detections = []
-        for det in detections:
-            # Find matching track for this detection
-            matching_track = None
-            for track in tracks:
-                # Match by position and class (within small tolerance for position)
-                if (abs(track.detection.x - det.x) < 5 and 
-                    abs(track.detection.y - det.y) < 5 and
-                    track.detection.class_name == det.class_name):
-                    matching_track = track
-                    break
-            
-            if matching_track:
-                # Create enriched detection with track info
-                enriched_det = Detection(
-                    x=det.x,
-                    y=det.y,
-                    width=det.width,
-                    height=det.height,
-                    confidence=det.confidence,
-                    class_id=det.class_id,
-                    class_name=det.class_name,
-                    color_class=det.color_class,
-                    distance=det.distance,
-                    track_id=matching_track.track_id,
-                    velocity=matching_track.velocity
-                )
-                enriched_detections.append(enriched_det)
-            else:
-                enriched_detections.append(det)
-        
-        # Calculate servo crosshair position (current PTU position in pixel coordinates)
-        servo_crosshair = None
-        # if self.ptu.is_connected and self.coordinate_converter:
-        #     current_azimuth, current_pitch = self.ptu.get_position()
-        #     servo_x, servo_y = self.coordinate_converter.angle_to_pixel(
-        #         current_azimuth, current_pitch, current_azimuth, current_pitch
-        #     )
-        #     servo_crosshair = (servo_x, servo_y)
-            
-        #     # Move PTU to track predicted point if tracking is enabled
-        #     if self.ptu_tracking_enabled and predicted_point:
-        #         self._move_ptu_to_point(predicted_point)
-        
-        # Update operator view IMMEDIATELY with current frame and latest detections
-        # This ensures smooth display regardless of detection speed
+        # CRITICAL: Display raw frame IMMEDIATELY before any processing
+        # This ensures the UI shows the latest frame as soon as it's captured
+        # Processing results will update the frame later via signal callback
         self.main_window.get_operator_view().update_frame(
             frame,
-            enriched_detections,
-            predicted_point,
-            servo_crosshair,
+            self.latest_enriched_detections,  # Use latest results if available
+            self.latest_predicted_point,  # Use latest prediction if available
+            None,  # No servo crosshair yet
             self.prediction_horizon_ms
         )
         
-        # Now handle detection asynchronously (non-blocking)
-        # Frame skipping: only run detection every N frames
-        self.frame_counter += 1
-        should_detect = (self.frame_counter % Config.DETECTION_FRAME_SKIP == 0)
+        # Timestamp: After UI update
+        ui_update_end_time = time.time()
+        ui_update_duration = (ui_update_end_time - ui_update_start_time) * 1000  # Convert to ms
         
-        if should_detect and self.detection_thread:
-            # Add frame to detection queue (non-blocking)
-            self.detection_thread.add_frame(frame)
+        # Timestamp: Before queueing frame
+        queue_start_time = time.time()
+        
+        # Queue frame for processing (detection + tracking + prediction) in background thread
+        # Send EVERY frame to processing thread (detection happens every N frames inside thread)
+        if self.processing_thread:
+            current_time = time.time()
+            # Add frame to processing queue (non-blocking)
+            # Processing thread will handle detection skipping internally
+            self.processing_thread.add_frame(frame, current_time)
             self.detection_fps_count += 1
         
-        # Get latest detection results (non-blocking) and update cache
-        if self.detection_thread:
-            frame_id, new_detections = self.detection_thread.get_latest_result()
-            if frame_id is not None and frame_id != self.last_detection_frame_id:
-                # Update cached detections for next frame display
-                self.latest_detections = new_detections
-                self.last_detection_frame_id = frame_id
-                
-                # Update detection status (non-blocking UI update)
-                self.main_window.get_system_view().update_detection_status(len(new_detections) > 0)
-                
-                # Check for blacklist detections and add alerts (non-blocking)
-                blacklist_detections = self.detector.get_blacklist_detections(new_detections)
-                if blacklist_detections:
-                    # Threat detected
-                    det = blacklist_detections[0]
-                    color_info = f" ({det.color_class})" if det.color_class else ""
-                    self.main_window.get_system_view().add_alert(
-                        f"THREAT DETECTED: {det.class_name}{color_info} at ({det.x}, {det.y})",
-                        "THREAT"
-                    )
-                elif len(new_detections) > 0 and len(blacklist_detections) == 0:
-                    # Only whitelist detected
-                    det = new_detections[0]
-                    self.main_window.get_system_view().add_alert(
-                        f"Whitelist object detected: {det.class_name}",
-                        "INFO"
-                    )
+        # Timestamp: After queueing frame
+        queue_end_time = time.time()
+        queue_duration = (queue_end_time - queue_start_time) * 1000  # Convert to ms
+        
+        # Timestamp: End of frame processing
+        frame_process_end_time = time.time()
+        total_process_duration = (frame_process_end_time - frame_process_start_time) * 1000  # Convert to ms
+        
+        # Log processing timestamps (throttled to avoid spam)
+        if not hasattr(self, '_last_timestamp_log_time'):
+            self._last_timestamp_log_time = 0.0
+            self._timestamp_log_interval = 1.0  # Log every 1 second
+        
+        current_time = time.time()
+        if current_time - self._last_timestamp_log_time >= self._timestamp_log_interval:
+            logger.info(
+                f"Frame processing timestamps - "
+                f"Read: {frame_read_duration:.2f}ms, "
+                f"UI Update: {ui_update_duration:.2f}ms, "
+                f"Queue: {queue_duration:.2f}ms, "
+                f"Total: {total_process_duration:.2f}ms"
+            )
+            self._last_timestamp_log_time = current_time
         
         # Update FPS (separate tracking for display and detection)
         self.display_fps_count += 1
@@ -620,8 +831,8 @@ class DroneDetectionApp:
             
             # Update status bar with both FPS
             dropped_info = ""
-            if self.detection_thread:
-                dropped = self.detection_thread.dropped_count
+            if self.processing_thread:
+                dropped = self.processing_thread.dropped_count
                 if dropped > 0:
                     dropped_info = f" (Dropped: {dropped})"
             
@@ -650,10 +861,10 @@ class DroneDetectionApp:
         logger.info("Cleaning up...")
         self.is_running = False
         
-        # Stop detection thread
-        if self.detection_thread and self.detection_thread.is_alive():
-            self.detection_thread.stop()
-            self.detection_thread.join(timeout=2.0)
+        # Stop processing thread
+        if self.processing_thread and self.processing_thread.is_alive():
+            self.processing_thread.stop()
+            self.processing_thread.join(timeout=2.0)
         
         # Stop timer
         self.frame_timer.stop()
