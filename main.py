@@ -33,6 +33,78 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
+class CameraReadingThread(threading.Thread):
+    """
+    Thread for continuously reading camera frames to prevent UI blocking.
+    All camera I/O operations happen in this thread.
+    """
+    
+    def __init__(self, camera, frame_queue, max_queue_size=2):
+        """
+        Initialize the camera reading thread.
+        
+        Args:
+            camera: CameraModule instance
+            frame_queue: Queue to put frames into
+            max_queue_size: Maximum frames in queue (drops old frames if exceeded)
+        """
+        super().__init__(daemon=True)
+        self.camera = camera
+        self.frame_queue = frame_queue
+        self.max_queue_size = max_queue_size
+        self.is_running = False
+        self.read_count = 0
+        self.dropped_count = 0
+        
+    def run(self):
+        """Main thread loop - continuously read frames."""
+        self.is_running = True
+        logger.info("Camera reading thread started")
+        
+        while self.is_running:
+            try:
+                # Check if camera is connected
+                if not self.camera.is_connected():
+                    time.sleep(0.033)  # ~30 FPS check interval
+                    continue
+                
+                # Read frame from camera (this can block, but it's OK in this thread)
+                ret, frame = self.camera.read_latest_frame()
+                
+                if ret and frame is not None:
+                    # Clear old frames to keep only latest (low latency)
+                    while self.frame_queue.qsize() >= self.max_queue_size:
+                        try:
+                            self.frame_queue.get_nowait()
+                            self.dropped_count += 1
+                        except Empty:
+                            break
+                    
+                    # Put frame in queue (non-blocking)
+                    try:
+                        self.frame_queue.put_nowait((frame.copy(), time.time()))
+                        self.read_count += 1
+                    except:
+                        self.dropped_count += 1
+                else:
+                    # No frame available, small sleep to avoid busy-waiting
+                    time.sleep(0.001)  # 1ms
+                    
+            except Exception as e:
+                logger.error(f"Error in camera reading thread: {str(e)}")
+                if not self.is_running:
+                    break
+                # Small sleep on error to prevent tight loop
+                time.sleep(0.01)
+        
+        logger.info(f"Camera reading thread stopped. Read {self.read_count} frames, dropped {self.dropped_count}")
+    
+    def stop(self):
+        """Stop the camera reading thread."""
+        self.is_running = False
+        logger.info("Stopping camera reading thread...")
+
+
 class ProcessingResultSignals(QObject):
     """Signals for thread-safe UI updates from processing thread."""
     result_ready = pyqtSignal(int, list, object, list)  # frame_id, enriched_detections, predicted_point, tracks
@@ -370,6 +442,10 @@ class DroneDetectionApp:
         self.frame_timer = QTimer()
         self.frame_timer.timeout.connect(self.process_frame)
         
+        # Camera reading thread (prevents UI blocking)
+        self.camera_frame_queue = Queue(maxsize=2)  # Keep only latest 2 frames
+        self.camera_reading_thread = None
+        
         # Processing threading (detection, tracking, prediction)
         self.processing_thread = None
         self.processing_signals = ProcessingResultSignals()
@@ -412,11 +488,16 @@ class DroneDetectionApp:
         self.PTU_PIXELS_PER_DEGREE_PITCH = 37.0    # Vertical movement
         
         # Minimum pixel offset threshold to trigger PTU movement (avoid jitter)
-        self.PTU_TRACKING_THRESHOLD_PIXELS = 5.0  # Only move if offset > 5 pixels
+        self.PTU_TRACKING_THRESHOLD_PIXELS = 3.0  # Only move if offset > 3 pixels (reduced for better responsiveness)
         
         # Throttle PTU movements to avoid excessive commands
         self.last_ptu_tracking_time: float = 0.0
-        self.PTU_TRACKING_MIN_INTERVAL: float = 0.1  # Minimum 100ms between movements
+        self.PTU_TRACKING_MIN_INTERVAL: float = 0.05  # Minimum 50ms between movements (increased frequency)
+        
+        # Smooth tracking parameters - move in incremental steps
+        self.PTU_TRACKING_STEP_PERCENTAGE = 0.15  # Move 15% of calculated offset per step (very smooth movement, more steps)
+        self.PTU_TRACKING_MAX_STEP_DEGREES = 0.2  # Maximum step size in degrees (smaller steps for smoother movement)
+        self.PTU_TRACKING_CONVERGENCE_THRESHOLD = 2.0  # Stop tracking when offset < 2 pixels
         
     def initialize(self) -> bool:
         """
@@ -464,6 +545,16 @@ class DroneDetectionApp:
         
         # Update available PTU ports
         self._update_ptu_ports()
+        
+        # Start camera reading thread (prevents UI blocking on camera I/O)
+        if camera_connected:
+            self.camera_reading_thread = CameraReadingThread(
+                self.camera,
+                self.camera_frame_queue,
+                max_queue_size=2
+            )
+            self.camera_reading_thread.start()
+            logger.info("Camera reading thread started")
         
         # Start processing thread (detection + tracking + prediction) with minimal queue for low latency
         # Queue size of 1 ensures we always process the latest frame, dropping old ones
@@ -701,58 +792,46 @@ class DroneDetectionApp:
         if (self.ptu_tracking_enabled and 
             predicted_point is not None and 
             self.main_window.get_operator_view().current_frame is not None):
-            
-            # Check if auto-tracking checkbox is checked
-            ptu_view = self.main_window.get_ptu_control_view()
-            if ptu_view.auto_tracking_checkbox.isChecked():
-                self._update_ptu_tracking(predicted_point)
+            self._update_ptu_tracking(predicted_point)
         
         # Update UI with latest results (will use current frame from operator view)
         if self.main_window.get_operator_view().current_frame is not None:
-            frame = self.main_window.get_operator_view().current_frame
-            servo_crosshair = None  # Can be calculated if needed
-            
-            # Update operator view with enriched detections and predictions
-            self.main_window.get_operator_view().update_frame(
-                frame,
-                enriched_detections,
-                predicted_point,
-                servo_crosshair,
-                self.prediction_horizon_ms
-            )
+            try:
+                frame = self.main_window.get_operator_view().current_frame
+                servo_crosshair = None  # Can be calculated if needed
+                
+                # Update operator view with enriched detections and predictions
+                self.main_window.get_operator_view().update_frame(
+                    frame,
+                    enriched_detections,
+                    predicted_point,
+                    servo_crosshair,
+                    self.prediction_horizon_ms
+                )
+            except Exception as e:
+                logger.error(f"Error updating UI with processing results: {str(e)}")
+                # Continue even if UI update fails
     
     def process_frame(self):
-        """Process a single frame - display immediately, detection runs asynchronously."""
+        """
+        Process a single frame - display immediately, detection runs asynchronously.
+        All camera I/O happens in camera_reading_thread to prevent UI blocking.
+        """
         if not self.is_running:
             return
         
-        # Check if camera is still connected before reading
+        # Check if camera is still connected
         if not self.camera.is_connected():
             self.is_running = False
             self.frame_timer.stop()
             self.main_window.get_system_view().update_camera_status(False)
             return
         
+        # Get frame from camera reading thread queue (non-blocking)
         try:
-            ret, frame = self.camera.read_latest_frame()
-            if not ret or frame is None:
-                # Video has ended or failed to read
-                if not self.camera.is_running:
-                    logger.info("Video playback ended. Stopping frame processing.")
-                    self.is_running = False
-                    self.frame_timer.stop()
-                    self.main_window.get_system_view().add_alert("Video playback ended", "INFO")
-                else:
-                    logger.warning("Failed to read frame")
-                self.main_window.get_system_view().update_camera_status(False)
-                return
-        except Exception as e:
-            logger.error(f"Error reading frame: {str(e)}")
-            # If camera was released during read, stop processing gracefully
-            if not self.camera.is_connected():
-                self.is_running = False
-                self.frame_timer.stop()
-            self.main_window.get_system_view().update_camera_status(False)
+            frame, timestamp = self.camera_frame_queue.get_nowait()
+        except Empty:
+            # No frame available yet, skip this cycle (camera thread will provide next frame)
             return
         
         # Update camera status
@@ -761,18 +840,25 @@ class DroneDetectionApp:
         # CRITICAL: Display raw frame IMMEDIATELY before any processing
         # This ensures the UI shows the latest frame as soon as it's captured
         # Processing results will update the frame later via signal callback
-        self.main_window.get_operator_view().update_frame(
-            frame,
-            self.latest_enriched_detections,  # Use latest results if available
-            self.latest_predicted_point,  # Use latest prediction if available
-            None,  # No servo crosshair yet
-            self.prediction_horizon_ms
-        )
+        try:
+            self.main_window.get_operator_view().update_frame(
+                frame,
+                self.latest_enriched_detections,  # Use latest results if available
+                self.latest_predicted_point,  # Use latest prediction if available
+                None,  # No servo crosshair yet
+                self.prediction_horizon_ms
+            )
+        except Exception as e:
+            logger.error(f"Error updating frame display: {str(e)}")
+            # Continue processing even if display update fails
         
         # Queue frame for processing (detection + tracking + prediction) in background thread
         if self.processing_thread:
-            self.processing_thread.add_frame(frame, time.time())
-            self.detection_fps_count += 1
+            try:
+                self.processing_thread.add_frame(frame, timestamp)
+                self.detection_fps_count += 1
+            except Exception as e:
+                logger.error(f"Error queuing frame for processing: {str(e)}")
         
         # Update FPS (separate tracking for display and detection)
         self.display_fps_count += 1
@@ -825,6 +911,12 @@ class DroneDetectionApp:
         """Cleanup resources."""
         logger.info("Cleaning up...")
         self.is_running = False
+        
+        # Stop camera reading thread first (stops frame production)
+        if self.camera_reading_thread and self.camera_reading_thread.is_alive():
+            logger.info("Stopping camera reading thread...")
+            self.camera_reading_thread.stop()
+            self.camera_reading_thread.join(timeout=2.0)
         
         # Stop processing thread
         if self.processing_thread and self.processing_thread.is_alive():
@@ -983,10 +1075,12 @@ class DroneDetectionApp:
     
     def _update_ptu_tracking(self, predicted_point: Tuple[float, float]):
         """
-        Update PTU position to align camera center with predicted point.
+        Update PTU position to align camera center with predicted point using smooth incremental movements.
         
         This method calculates the pixel offset between the predicted point (reference)
-        and the camera center, then converts it to PTU movement angles using calibration data.
+        and the camera center, then moves the PTU in small incremental steps to minimize
+        the deviation iteratively. Each step moves a fraction of the calculated offset,
+        then recalculates the deviation and moves again until convergence.
         
         Args:
             predicted_point: (x, y) pixel coordinates of the predicted point
@@ -1014,34 +1108,55 @@ class DroneDetectionApp:
         # Predicted point (target)
         pred_x, pred_y = predicted_point
         
-        # Calculate pixel offset (positive = move right/down, negative = move left/up)
+        # Calculate pixel offset (positive = target is right/below center)
         offset_x = pred_x - camera_center_x  # Positive = target is to the right
         offset_y = pred_y - camera_center_y  # Positive = target is below center
         
-        # Check if offset is significant enough to warrant movement
-        if abs(offset_x) < self.PTU_TRACKING_THRESHOLD_PIXELS and \
-           abs(offset_y) < self.PTU_TRACKING_THRESHOLD_PIXELS:
-            return  # Offset too small, skip movement
+        # Calculate total deviation magnitude
+        total_deviation = (offset_x**2 + offset_y**2)**0.5
         
-        # Convert pixel offset to degrees using calibration data
+        # Check if we've converged (deviation is small enough)
+        if total_deviation < self.PTU_TRACKING_CONVERGENCE_THRESHOLD:
+            return  # Already aligned, no movement needed
+        
+        # Convert full pixel offset to degrees using calibration data
         # Calibration: 1° azimuth → 29 pixels right, 1° pitch → 37 pixels down
-        # Positive offset_x = target to the right → move PTU right (positive azimuth)
-        # Positive offset_y = target below center → move PTU down (positive pitch)
-        delta_azimuth_deg = offset_x / self.PTU_PIXELS_PER_DEGREE_AZIMUTH
-        delta_pitch_deg = offset_y / self.PTU_PIXELS_PER_DEGREE_PITCH
+        # To bring target to center: if target is RIGHT, move PTU LEFT (inverse direction)
+        full_delta_azimuth_deg = -offset_x / self.PTU_PIXELS_PER_DEGREE_AZIMUTH  # Inverted: move opposite direction
+        full_delta_pitch_deg = -offset_y / self.PTU_PIXELS_PER_DEGREE_PITCH  # Inverted: move opposite direction
+        
+        # Calculate step size: move a percentage of the full offset, but cap at maximum step size
+        step_azimuth_deg = full_delta_azimuth_deg * self.PTU_TRACKING_STEP_PERCENTAGE
+        step_pitch_deg = full_delta_pitch_deg * self.PTU_TRACKING_STEP_PERCENTAGE
+        
+        # Apply maximum step size limit to prevent overshooting
+        if abs(step_azimuth_deg) > self.PTU_TRACKING_MAX_STEP_DEGREES:
+            step_azimuth_deg = self.PTU_TRACKING_MAX_STEP_DEGREES * (1.0 if step_azimuth_deg > 0 else -1.0)
+        if abs(step_pitch_deg) > self.PTU_TRACKING_MAX_STEP_DEGREES:
+            step_pitch_deg = self.PTU_TRACKING_MAX_STEP_DEGREES * (1.0 if step_pitch_deg > 0 else -1.0)
         
         # Get current speed from PTU control view
         ptu_view = self.main_window.get_ptu_control_view()
         speed = getattr(ptu_view, 'current_speed', 20)
         
-        # Move PTU relative to current position
-        success = self.ptu.move_relative(delta_azimuth_deg, delta_pitch_deg, speed)
+        # Move PTU relative to current position (incremental step)
+        success = self.ptu.move_relative(step_azimuth_deg, step_pitch_deg, speed)
         
         if success:
-            logger.debug(
-                f"PTU auto-tracking: offset=({offset_x:.1f}, {offset_y:.1f}) px, "
-                f"move=({delta_azimuth_deg:.3f}°, {delta_pitch_deg:.3f}°)"
+            # Calculate expected remaining deviation after this step
+            # Convert step back to pixels to estimate remaining offset
+            remaining_offset_x = offset_x + (step_azimuth_deg * self.PTU_PIXELS_PER_DEGREE_AZIMUTH)
+            remaining_offset_y = offset_y + (step_pitch_deg * self.PTU_PIXELS_PER_DEGREE_PITCH)
+            remaining_deviation = (remaining_offset_x**2 + remaining_offset_y**2)**0.5
+            
+            logger.info(
+                f"PTU auto-tracking (smooth): pred=({pred_x:.1f}, {pred_y:.1f}), center=({camera_center_x:.1f}, {camera_center_y:.1f}), "
+                f"offset=({offset_x:.1f}, {offset_y:.1f}) px, "
+                f"step=({step_azimuth_deg:.3f}°, {step_pitch_deg:.3f}°), "
+                f"remaining_deviation={remaining_deviation:.1f} px"
             )
+        else:
+            logger.warning("PTU auto-tracking: Failed to move PTU")
 
 
 def main():
