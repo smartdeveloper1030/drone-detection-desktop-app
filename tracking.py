@@ -405,15 +405,12 @@ class Tracker:
                     predictions.append(pred)
         return predictions
     
-    def get_primary_prediction(self, time_ahead_ms: float) -> Optional[Tuple[float, float]]:
+    def get_primary_track(self) -> Optional['Track']:
         """
-        Get primary predicted position (for blacklist/threat objects, or first track).
-        
-        Args:
-            time_ahead_ms: Time to predict ahead in milliseconds
+        Get primary track (largest object by area).
         
         Returns:
-            Predicted (x, y) position or None
+            Primary Track object or None
         """
         # Prioritize blacklist/threat tracks
         blacklist_tracks = [
@@ -422,21 +419,34 @@ class Tracker:
         ]
         
         if blacklist_tracks:
-            # Use the most recent/confident blacklist track
-            track = max(blacklist_tracks, key=lambda t: (t.hits, t.detection.confidence))
-            return track.predict(time_ahead_ms)
+            # Use the largest blacklist track (by area)
+            return max(blacklist_tracks, key=lambda t: t.detection.width * t.detection.height)
         
-        # Otherwise, use first confirmed track
+        # Otherwise, use largest confirmed track
         confirmed_tracks = [
             track for track in self.tracks.values()
             if track.hits >= self.min_hits
         ]
         
         if confirmed_tracks:
-            # Use the most confident track
-            track = max(confirmed_tracks, key=lambda t: t.detection.confidence)
-            return track.predict(time_ahead_ms)
+            # Use the largest track (by area)
+            return max(confirmed_tracks, key=lambda t: t.detection.width * t.detection.height)
         
+        return None
+    
+    def get_primary_prediction(self, time_ahead_ms: float) -> Optional[Tuple[float, float]]:
+        """
+        Get primary predicted position (for largest object).
+        
+        Args:
+            time_ahead_ms: Time to predict ahead in milliseconds
+        
+        Returns:
+            Predicted (x, y) position or None
+        """
+        primary_track = self.get_primary_track()
+        if primary_track:
+            return primary_track.predict(time_ahead_ms)
         return None
     
     def _is_blacklist(self, detection: Detection) -> bool:

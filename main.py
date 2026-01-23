@@ -88,6 +88,10 @@ class DetectionProcessingThread(threading.Thread):
                 # Step 1: Run detection ONLY every N frames
                 if should_detect:
                     detections = self.detector.detect(frame)
+                    # Filter to keep only the largest detection (by area)
+                    if detections:
+                        largest_detection = max(detections, key=lambda d: d.width * d.height)
+                        detections = [largest_detection]
                     # Step 2: Update tracker with detections
                     tracks = self.tracker.update(detections, timestamp)
                 else:
@@ -98,57 +102,45 @@ class DetectionProcessingThread(threading.Thread):
                 # Step 3: Get prediction from tracker (ALWAYS, every frame)
                 predicted_point = self.tracker.get_primary_prediction(self.prediction_horizon_ms)
                 
-                # Step 4: Enrich detections with track information
-                # For frames without detection, use predicted positions from tracks
+                # Step 4: Get primary track (largest) for enriched detections
+                primary_track = self.tracker.get_primary_track()
+                
+                # Step 5: Enrich detections with track information (only primary/largest track)
                 enriched_detections = []
                 
-                if should_detect and detections:
-                    # Frame with detections: enrich with track info
-                    for det in detections:
-                        # Find matching track for this detection
-                        matching_track = None
-                        for track in tracks:
-                            # Match by position and class (within small tolerance for position)
-                            if (abs(track.detection.x - det.x) < 5 and 
-                                abs(track.detection.y - det.y) < 5 and
-                                track.detection.class_name == det.class_name):
-                                matching_track = track
-                                break
-                        
-                        if matching_track:
-                            # Create enriched detection with track info
-                            enriched_det = Detection(
-                                x=det.x,
-                                y=det.y,
-                                width=det.width,
-                                height=det.height,
-                                confidence=det.confidence,
-                                class_id=det.class_id,
-                                class_name=det.class_name,
-                                color_class=det.color_class,
-                                distance=det.distance,
-                                track_id=matching_track.track_id,
-                                velocity=matching_track.velocity
-                            )
-                            enriched_detections.append(enriched_det)
-                        else:
-                            enriched_detections.append(det)
-                else:
-                    # Frame without detection: use predicted positions from tracks
-                    for track in tracks:
-                        # Create detection from predicted track position
+                if primary_track:
+                    # Use primary track (largest object)
+                    if should_detect and detections and len(detections) > 0:
+                        # Frame with detections: use the detection
+                        det = detections[0]
                         enriched_det = Detection(
-                            x=track.detection.x,  # Predicted position
-                            y=track.detection.y,  # Predicted position
-                            width=track.detection.width,
-                            height=track.detection.height,
-                            confidence=track.detection.confidence * 0.8,  # Lower confidence for predicted
-                            class_id=track.detection.class_id,
-                            class_name=track.detection.class_name,
-                            color_class=track.detection.color_class,
-                            distance=track.detection.distance,
-                            track_id=track.track_id,
-                            velocity=track.velocity
+                            x=det.x,
+                            y=det.y,
+                            width=det.width,
+                            height=det.height,
+                            confidence=det.confidence,
+                            class_id=det.class_id,
+                            class_name=det.class_name,
+                            color_class=det.color_class,
+                            distance=det.distance,
+                            track_id=primary_track.track_id,
+                            velocity=primary_track.velocity
+                        )
+                        enriched_detections.append(enriched_det)
+                    else:
+                        # Frame without detection: use predicted position from primary track
+                        enriched_det = Detection(
+                            x=primary_track.detection.x,  # Predicted position
+                            y=primary_track.detection.y,  # Predicted position
+                            width=primary_track.detection.width,
+                            height=primary_track.detection.height,
+                            confidence=primary_track.detection.confidence * 0.8,  # Lower confidence for predicted
+                            class_id=primary_track.detection.class_id,
+                            class_name=primary_track.detection.class_name,
+                            color_class=primary_track.detection.color_class,
+                            distance=primary_track.detection.distance,
+                            track_id=primary_track.track_id,
+                            velocity=primary_track.velocity
                         )
                         enriched_detections.append(enriched_det)
                 
@@ -412,6 +404,19 @@ class DroneDetectionApp:
         self.last_prediction_distance: Optional[Tuple[float, float]] = None  # (distance_x, distance_y)
         self.last_prediction_distance_log_time: float = 0.0
         self.prediction_distance_log_interval: float = 1.0  # Log distance every 1 second
+        
+        # PTU auto-tracking calibration constants
+        # Based on calibration: initial (1094, 153), 1° move → (1123, 190), 5° move → (1220, 300)
+        # Average: ~29 pixels/degree for azimuth (horizontal), ~37 pixels/degree for pitch (vertical)
+        self.PTU_PIXELS_PER_DEGREE_AZIMUTH = 29.0  # Horizontal movement
+        self.PTU_PIXELS_PER_DEGREE_PITCH = 37.0    # Vertical movement
+        
+        # Minimum pixel offset threshold to trigger PTU movement (avoid jitter)
+        self.PTU_TRACKING_THRESHOLD_PIXELS = 5.0  # Only move if offset > 5 pixels
+        
+        # Throttle PTU movements to avoid excessive commands
+        self.last_ptu_tracking_time: float = 0.0
+        self.PTU_TRACKING_MIN_INTERVAL: float = 0.1  # Minimum 100ms between movements
         
     def initialize(self) -> bool:
         """
@@ -692,6 +697,16 @@ class DroneDetectionApp:
                 self.last_prediction_distance = (distance_x, distance_y)
                 self.last_prediction_distance_log_time = current_time
         
+        # PTU auto-tracking: Move PTU to align camera center with predicted point
+        if (self.ptu_tracking_enabled and 
+            predicted_point is not None and 
+            self.main_window.get_operator_view().current_frame is not None):
+            
+            # Check if auto-tracking checkbox is checked
+            ptu_view = self.main_window.get_ptu_control_view()
+            if ptu_view.auto_tracking_checkbox.isChecked():
+                self._update_ptu_tracking(predicted_point)
+        
         # Update UI with latest results (will use current frame from operator view)
         if self.main_window.get_operator_view().current_frame is not None:
             frame = self.main_window.get_operator_view().current_frame
@@ -708,9 +723,6 @@ class DroneDetectionApp:
     
     def process_frame(self):
         """Process a single frame - display immediately, detection runs asynchronously."""
-        # Timestamp: Start of frame processing
-        frame_process_start_time = time.time()
-        
         if not self.is_running:
             return
         
@@ -722,16 +734,7 @@ class DroneDetectionApp:
             return
         
         try:
-            # Timestamp: Before frame read
-            frame_read_start_time = time.time()
-            
-            # Read frame
             ret, frame = self.camera.read_latest_frame()
-            
-            # Timestamp: After frame read
-            frame_read_end_time = time.time()
-            frame_read_duration = (frame_read_end_time - frame_read_start_time) * 1000  # Convert to ms
-            
             if not ret or frame is None:
                 # Video has ended or failed to read
                 if not self.camera.is_running:
@@ -755,9 +758,6 @@ class DroneDetectionApp:
         # Update camera status
         self.main_window.get_system_view().update_camera_status(True)
         
-        # Timestamp: Before UI update
-        ui_update_start_time = time.time()
-        
         # CRITICAL: Display raw frame IMMEDIATELY before any processing
         # This ensures the UI shows the latest frame as soon as it's captured
         # Processing results will update the frame later via signal callback
@@ -769,45 +769,10 @@ class DroneDetectionApp:
             self.prediction_horizon_ms
         )
         
-        # Timestamp: After UI update
-        ui_update_end_time = time.time()
-        ui_update_duration = (ui_update_end_time - ui_update_start_time) * 1000  # Convert to ms
-        
-        # Timestamp: Before queueing frame
-        queue_start_time = time.time()
-        
         # Queue frame for processing (detection + tracking + prediction) in background thread
-        # Send EVERY frame to processing thread (detection happens every N frames inside thread)
         if self.processing_thread:
-            current_time = time.time()
-            # Add frame to processing queue (non-blocking)
-            # Processing thread will handle detection skipping internally
-            self.processing_thread.add_frame(frame, current_time)
+            self.processing_thread.add_frame(frame, time.time())
             self.detection_fps_count += 1
-        
-        # Timestamp: After queueing frame
-        queue_end_time = time.time()
-        queue_duration = (queue_end_time - queue_start_time) * 1000  # Convert to ms
-        
-        # Timestamp: End of frame processing
-        frame_process_end_time = time.time()
-        total_process_duration = (frame_process_end_time - frame_process_start_time) * 1000  # Convert to ms
-        
-        # Log processing timestamps (throttled to avoid spam)
-        if not hasattr(self, '_last_timestamp_log_time'):
-            self._last_timestamp_log_time = 0.0
-            self._timestamp_log_interval = 1.0  # Log every 1 second
-        
-        current_time = time.time()
-        if current_time - self._last_timestamp_log_time >= self._timestamp_log_interval:
-            logger.info(
-                f"Frame processing timestamps - "
-                f"Read: {frame_read_duration:.2f}ms, "
-                f"UI Update: {ui_update_duration:.2f}ms, "
-                f"Queue: {queue_duration:.2f}ms, "
-                f"Total: {total_process_duration:.2f}ms"
-            )
-            self._last_timestamp_log_time = current_time
         
         # Update FPS (separate tracking for display and detection)
         self.display_fps_count += 1
@@ -1015,6 +980,68 @@ class DroneDetectionApp:
         """
         self.ptu_tracking_enabled = enable
         logger.info(f"PTU tracking {'enabled' if enable else 'disabled'}")
+    
+    def _update_ptu_tracking(self, predicted_point: Tuple[float, float]):
+        """
+        Update PTU position to align camera center with predicted point.
+        
+        This method calculates the pixel offset between the predicted point (reference)
+        and the camera center, then converts it to PTU movement angles using calibration data.
+        
+        Args:
+            predicted_point: (x, y) pixel coordinates of the predicted point
+        """
+        if not self.ptu.is_connected:
+            return
+        
+        # Throttle movements to avoid excessive commands
+        current_time = time.time()
+        if current_time - self.last_ptu_tracking_time < self.PTU_TRACKING_MIN_INTERVAL:
+            return
+        self.last_ptu_tracking_time = current_time
+        
+        # Get current frame to determine camera center
+        if self.main_window.get_operator_view().current_frame is None:
+            return
+        
+        frame = self.main_window.get_operator_view().current_frame
+        frame_height, frame_width = frame.shape[:2]
+        
+        # Camera center (reference point)
+        camera_center_x = frame_width / 2.0
+        camera_center_y = frame_height / 2.0
+        
+        # Predicted point (target)
+        pred_x, pred_y = predicted_point
+        
+        # Calculate pixel offset (positive = move right/down, negative = move left/up)
+        offset_x = pred_x - camera_center_x  # Positive = target is to the right
+        offset_y = pred_y - camera_center_y  # Positive = target is below center
+        
+        # Check if offset is significant enough to warrant movement
+        if abs(offset_x) < self.PTU_TRACKING_THRESHOLD_PIXELS and \
+           abs(offset_y) < self.PTU_TRACKING_THRESHOLD_PIXELS:
+            return  # Offset too small, skip movement
+        
+        # Convert pixel offset to degrees using calibration data
+        # Calibration: 1° azimuth → 29 pixels right, 1° pitch → 37 pixels down
+        # Positive offset_x = target to the right → move PTU right (positive azimuth)
+        # Positive offset_y = target below center → move PTU down (positive pitch)
+        delta_azimuth_deg = offset_x / self.PTU_PIXELS_PER_DEGREE_AZIMUTH
+        delta_pitch_deg = offset_y / self.PTU_PIXELS_PER_DEGREE_PITCH
+        
+        # Get current speed from PTU control view
+        ptu_view = self.main_window.get_ptu_control_view()
+        speed = getattr(ptu_view, 'current_speed', 20)
+        
+        # Move PTU relative to current position
+        success = self.ptu.move_relative(delta_azimuth_deg, delta_pitch_deg, speed)
+        
+        if success:
+            logger.debug(
+                f"PTU auto-tracking: offset=({offset_x:.1f}, {offset_y:.1f}) px, "
+                f"move=({delta_azimuth_deg:.3f}°, {delta_pitch_deg:.3f}°)"
+            )
 
 
 def main():

@@ -90,14 +90,18 @@ class OperatorView(QWidget):
         # Draw on frame
         display_frame = self.draw_detections(frame.copy(), detections, predicted_point, servo_crosshair, prediction_horizon_ms)
         
+        # Convert BGR to RGB for QImage (no color conversion in QImage creation)
+        display_frame_rgb = cv2.cvtColor(display_frame, cv2.COLOR_BGR2RGB)
+        
         # Convert to QImage and display
-        height, width, channel = display_frame.shape
+        height, width, channel = display_frame_rgb.shape
         bytes_per_line = 3 * width
         
         # Store frame aspect ratio (should be 16:9 now)
         self.frame_aspect_ratio = self.target_aspect_ratio
         
-        q_image = QImage(display_frame_rgb.data, width, height, bytes_per_line, QImage.Format_RGB888)
+        # Convert to contiguous array and then to bytes for QImage
+        q_image = QImage(np.ascontiguousarray(display_frame_rgb).tobytes(), width, height, bytes_per_line, QImage.Format_RGB888)
         
         # Scale to fit label while maintaining 16:9 aspect ratio
         pixmap = QPixmap.fromImage(q_image)
