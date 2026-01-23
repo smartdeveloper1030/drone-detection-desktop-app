@@ -322,6 +322,107 @@ class OperatorView(QWidget):
                 line_thickness
             )
         
+        # Always draw center crosshair (matching image format)
+        center_x = int(frame_width / 2.0)
+        center_y = int(frame_height / 2.0)
+        
+        # Colors
+        red_color = (0, 0, 255)  # Bright red (BGR)
+        reddish_orange_color = (0, 50, 255)  # Reddish-orange (BGR)
+        green_color = (0, 255, 0)  # Vibrant green (BGR)
+        
+        # Thickness values
+        vertical_line_thickness = max(2, int(scale_factor * 2))  # Green vertical line thickness
+        radial_line_thickness = max(2, int(scale_factor * 2))  # Radial lines thickness
+        horizontal_line_thickness = max(2, int(scale_factor * 2))  # Green horizontal lines thickness
+        
+        # Calculate horizontal line length (will be used for vertical lines too)
+        horizontal_line_length = max(40, int(scale_factor * 60))
+        
+        # 2. Central reddish-orange circle with radial lines
+        inner_circle_radius = max(5, int(scale_factor * 8))
+        outer_circle_radius = max(10, int(scale_factor * 15))
+        radial_line_length = max(8, int(scale_factor * 12))
+        
+        # Draw outer faint circle outline
+        cv2.circle(frame, 
+                  (center_x, center_y), 
+                  outer_circle_radius, 
+                  reddish_orange_color, 
+                  max(1, int(scale_factor * 1)))
+        
+        # Draw inner circle
+        cv2.circle(frame, 
+                  (center_x, center_y), 
+                  inner_circle_radius, 
+                  reddish_orange_color, 
+                  radial_line_thickness)
+        
+        # Draw four short radial lines (up, down, left, right)
+        # Up
+        cv2.line(frame,
+                (center_x, center_y - inner_circle_radius),
+                (center_x, center_y - inner_circle_radius - radial_line_length),
+                reddish_orange_color,
+                radial_line_thickness)
+        # Down
+        cv2.line(frame,
+                (center_x, center_y + inner_circle_radius),
+                (center_x, center_y + inner_circle_radius + radial_line_length),
+                reddish_orange_color,
+                radial_line_thickness)
+        # Left
+        cv2.line(frame,
+                (center_x - inner_circle_radius, center_y),
+                (center_x - inner_circle_radius - radial_line_length, center_y),
+                reddish_orange_color,
+                radial_line_thickness)
+        # Right
+        cv2.line(frame,
+                (center_x + inner_circle_radius, center_y),
+                (center_x + inner_circle_radius + radial_line_length, center_y),
+                reddish_orange_color,
+                radial_line_thickness)
+        
+        # Calculate where green lines should start (at the edge of outer circle)
+        # Horizontal lines start point
+        left_start_x = center_x - inner_circle_radius - radial_line_length
+        right_start_x = center_x + inner_circle_radius + radial_line_length
+        
+        # Vertical lines start points (at outer circle edge)
+        top_start_y = center_y - outer_circle_radius
+        bottom_start_y = center_y + outer_circle_radius
+        
+        # 1. Draw green vertical lines (two segments: top and bottom, avoiding center circle)
+        # Top vertical line (above circle)
+        cv2.line(frame,
+                (center_x, top_start_y - horizontal_line_length),
+                (center_x, top_start_y),
+                green_color,
+                vertical_line_thickness)
+        
+        # Bottom vertical line (below circle)
+        cv2.line(frame,
+                (center_x, bottom_start_y),
+                (center_x, bottom_start_y + horizontal_line_length),
+                green_color,
+                vertical_line_thickness)
+        
+        # 3. Draw two longer green horizontal lines extending left and right
+        # Left horizontal line (extends from left radial line)
+        cv2.line(frame,
+                (left_start_x, center_y),
+                (left_start_x - horizontal_line_length, center_y),
+                green_color,
+                horizontal_line_thickness)
+        
+        # Right horizontal line (extends from right radial line)
+        cv2.line(frame,
+                (right_start_x, center_y),
+                (right_start_x + horizontal_line_length, center_y),
+                green_color,
+                horizontal_line_thickness)
+        
         return frame
     
     def _is_blacklist(self, detection: Detection) -> bool:
