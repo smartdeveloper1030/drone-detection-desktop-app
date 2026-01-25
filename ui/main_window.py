@@ -1,10 +1,10 @@
 """
-Main window with side-by-side Operator View and System View.
+Main window with camera view on left and tabs on right.
 """
 from PyQt5.QtWidgets import (QMainWindow, QWidget, QHBoxLayout, QVBoxLayout, 
                              QStatusBar, QComboBox, QLabel, QSplitter, QTabWidget)
 from PyQt5.QtCore import Qt, pyqtSignal
-from ui.operator_view import OperatorView
+from ui.camera_view import CameraView
 from ui.system_view import SystemView
 from ui.ptu_control_view import PTUControlView
 from config import Config
@@ -23,7 +23,7 @@ class MainWindow(QMainWindow):
         """Initialize the main window."""
         super().__init__()
         self.setWindowTitle("Drone Detection System")
-        self.setGeometry(100, 100, 1200, 500)  # Wider window for side-by-side layout
+        self.setGeometry(100, 100, 1600, 900)  # Larger window for new layout
         
         # Disable animations for lower latency if configured
         if Config.UI_DISABLE_ANIMATIONS:
@@ -41,43 +41,19 @@ class MainWindow(QMainWindow):
         toolbar_layout.setContentsMargins(10, 5, 10, 5)
         
         mode_label = QLabel("Detection Mode:")
-        mode_label.setStyleSheet("color: white; font-weight: bold; font-size: 12px;")
+        mode_label.setProperty("class", "mode-label")
         toolbar_layout.addWidget(mode_label)
         
         # Mode selector (balloon/drone/person)
         self.mode_combo = QComboBox()
         self.mode_combo.addItems(["Drone", "Balloon", "Person"])
         self.mode_combo.setCurrentText(Config.DETECT_MODE.capitalize())
-        self.mode_combo.setStyleSheet("""
-            QComboBox {
-                background-color: #3b3b3b;
-                color: white;
-                border: 1px solid #555;
-                border-radius: 4px;
-                padding: 5px 10px;
-                min-width: 120px;
-                font-size: 12px;
-            }
-            QComboBox:hover {
-                background-color: #444;
-            }
-            QComboBox::drop-down {
-                border: none;
-                width: 20px;
-            }
-            QComboBox QAbstractItemView {
-                background-color: #3b3b3b;
-                color: white;
-                selection-background-color: #555;
-                border: 1px solid #555;
-            }
-        """)
         self.mode_combo.currentTextChanged.connect(self._on_mode_changed)
         toolbar_layout.addWidget(self.mode_combo)
         
         # Color selector (only visible when Balloon mode is selected)
         color_label = QLabel("Color:")
-        color_label.setStyleSheet("color: white; font-weight: bold; font-size: 12px;")
+        color_label.setProperty("class", "color-label")
         self.color_label = color_label
         toolbar_layout.addWidget(color_label)
         
@@ -85,30 +61,6 @@ class MainWindow(QMainWindow):
         # Available colors from ColorClassifier, with "All" option first
         self.color_combo.addItems(["All", "red", "white", "green", "blue", "black", "orange", "yellow"])
         self.color_combo.setCurrentText("red")  # Default to red
-        self.color_combo.setStyleSheet("""
-            QComboBox {
-                background-color: #3b3b3b;
-                color: white;
-                border: 1px solid #555;
-                border-radius: 4px;
-                padding: 5px 10px;
-                min-width: 100px;
-                font-size: 12px;
-            }
-            QComboBox:hover {
-                background-color: #444;
-            }
-            QComboBox::drop-down {
-                border: none;
-                width: 20px;
-            }
-            QComboBox QAbstractItemView {
-                background-color: #3b3b3b;
-                color: white;
-                selection-background-color: #555;
-                border: 1px solid #555;
-            }
-        """)
         self.color_combo.currentTextChanged.connect(self._on_color_changed)
         toolbar_layout.addWidget(self.color_combo)
         
@@ -119,93 +71,54 @@ class MainWindow(QMainWindow):
         
         main_layout.addLayout(toolbar_layout)
         
-        # Create tab widget for main views
-        self.tab_widget = QTabWidget()
-        self.tab_widget.setStyleSheet("""
-            QTabWidget::pane {
-                border: 1px solid #555;
-                background-color: #2b2b2b;
-            }
-            QTabBar::tab {
-                background-color: #3b3b3b;
-                color: white;
-                padding: 8px 20px;
-                border: 1px solid #555;
-                border-bottom: none;
-                border-top-left-radius: 4px;
-                border-top-right-radius: 4px;
-            }
-            QTabBar::tab:selected {
-                background-color: #2b2b2b;
-                color: #00ff00;
-            }
-            QTabBar::tab:hover {
-                background-color: #444;
-            }
-        """)
+        # Create main horizontal splitter: Left (camera) | Right (tabs)
+        main_splitter = QSplitter(Qt.Horizontal)
         
-        # Create splitter for side-by-side views (Detection tab)
-        detection_splitter = QSplitter(Qt.Horizontal)
+        # Left side: Camera view
+        self.camera_view = CameraView()
+        
+        # Right side: Tab widget
+        self.tab_widget = QTabWidget()
         
         # Create views
-        self.operator_view = OperatorView()
         self.system_view = SystemView()
-        
-        # Add views to splitter (left: operator, right: system)
-        detection_splitter.addWidget(self.operator_view)
-        detection_splitter.addWidget(self.system_view)
-        
-        # Set splitter proportions (65% operator, 35% system)
-        detection_splitter.setStretchFactor(0, 13)  # Operator view: 65% (13/20)
-        detection_splitter.setStretchFactor(1, 7)   # System view: 35% (7/20)
-        # Initial sizes: 65% and 35% of 1200px window width
-        detection_splitter.setSizes([780, 420])     # 65% = 780px, 35% = 420px
-        
-        # Set splitter style
-        detection_splitter.setStyleSheet("""
-            QSplitter::handle {
-                background-color: #555;
-                width: 3px;
-            }
-            QSplitter::handle:hover {
-                background-color: #666;
-            }
-        """)
-        
-        # Create PTU control view
         self.ptu_control_view = PTUControlView()
         
         # Add tabs
-        self.tab_widget.addTab(detection_splitter, "Detection")
-        self.tab_widget.addTab(self.ptu_control_view, "Servo Motor Control")
+        self.tab_widget.addTab(self.system_view, "Status")
+        self.tab_widget.addTab(self.ptu_control_view, "PTU")
         
-        main_layout.addWidget(self.tab_widget)
+        # Add to splitter: Left (camera) | Right (tabs)
+        main_splitter.addWidget(self.camera_view)
+        main_splitter.addWidget(self.tab_widget)
+        
+        # Set minimum width for tab widget to prevent it from being too narrow
+        self.tab_widget.setMinimumWidth(400)
+        
+        # Set splitter proportions (70% camera, 30% tabs)
+        # First set initial sizes explicitly to ensure correct initial split
+        # Calculate based on window width minus margins (approximately 1600px - 20px margins = 1580px usable)
+        window_width = 1600
+        camera_width = int(window_width * 0.70)  # 70% = 1120px
+        tabs_width = int(window_width * 0.30)    # 30% = 480px
+        main_splitter.setSizes([camera_width, tabs_width])
+        
+        # Then set stretch factors for resizing behavior
+        main_splitter.setStretchFactor(0, 7)  # Camera: 70%
+        main_splitter.setStretchFactor(1, 3)  # Tabs: 30%
+        
+        main_layout.addWidget(main_splitter)
         
         # Set central widget
         self.setCentralWidget(central_widget)
         
+        # Ensure sizes are applied after window is shown (use showEvent override)
+        self.main_splitter = main_splitter
+        self.camera_width = camera_width
+        self.tabs_width = tabs_width
+        
         # Status bar
         self.statusBar().showMessage("Ready")
-        # Set status bar text color to green
-        self.statusBar().setStyleSheet("""
-            QStatusBar {
-                color: #00aa00;
-                background-color: #2b2b2b;
-            }
-            QStatusBar::item {
-                color: #00ff00;
-            }
-        """)
-        
-        # Set dark theme
-        self.setStyleSheet("""
-            QMainWindow {
-                background-color: #2b2b00;
-            }
-            QWidget {
-                background-color: #2b2b00;
-            }
-        """)
     
     def _on_mode_changed(self, mode_text: str):
         """Handle mode selection change."""
@@ -247,9 +160,13 @@ class MainWindow(QMainWindow):
         if mode_capitalized in ["Drone", "Balloon", "Person"]:
             self.mode_combo.setCurrentText(mode_capitalized)
     
-    def get_operator_view(self) -> OperatorView:
-        """Get the operator view."""
-        return self.operator_view
+    def get_operator_view(self) -> CameraView:
+        """Get the camera view (backward compatibility - returns camera_view)."""
+        return self.camera_view
+    
+    def get_camera_view(self) -> CameraView:
+        """Get the camera view."""
+        return self.camera_view
     
     def get_system_view(self) -> SystemView:
         """Get the system view."""
@@ -258,4 +175,11 @@ class MainWindow(QMainWindow):
     def get_ptu_control_view(self) -> PTUControlView:
         """Get the PTU control view."""
         return self.ptu_control_view
+    
+    def showEvent(self, event):
+        """Override showEvent to set splitter sizes after window is shown."""
+        super().showEvent(event)
+        # Set splitter sizes after window is visible to ensure correct proportions
+        if hasattr(self, 'main_splitter'):
+            self.main_splitter.setSizes([self.camera_width, self.tabs_width])
 

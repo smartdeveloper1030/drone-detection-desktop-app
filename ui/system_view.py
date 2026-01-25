@@ -74,6 +74,14 @@ class SystemView(QWidget):
         self.detection_status_label.setStyleSheet("color: yellow;")
         status_layout.addWidget(self.detection_status_label, 3, 1)
         
+        # PTU connection status
+        ptu_label = QLabel("PTU:")
+        ptu_label.setStyleSheet("color: white;")
+        status_layout.addWidget(ptu_label, 4, 0)
+        self.ptu_status_label = QLabel("Disconnected")
+        self.ptu_status_label.setProperty("class", "status-disconnected")
+        status_layout.addWidget(self.ptu_status_label, 4, 1)
+        
         status_group.setLayout(status_layout)
         main_layout.addWidget(status_group)
         
@@ -153,7 +161,6 @@ class SystemView(QWidget):
         
         self.alert_text = QTextEdit()
         self.alert_text.setReadOnly(True)
-        self.alert_text.setMaximumHeight(200)
         self.alert_text.setStyleSheet("background-color: #1e1e1e; color: #00ff00;")  # Green text
         alerts_layout.addWidget(self.alert_text)
         
@@ -226,10 +233,19 @@ class SystemView(QWidget):
         """Update detection status."""
         if active:
             self.detection_status_label.setText("Active")
-            self.detection_status_label.setStyleSheet("color: green;")
+            self.detection_status_label.setProperty("class", "status-active")
         else:
             self.detection_status_label.setText("Inactive")
-            self.detection_status_label.setStyleSheet("color: yellow;")
+            self.detection_status_label.setProperty("class", "status-inactive")
+    
+    def update_ptu_status(self, connected: bool):
+        """Update PTU connection status."""
+        if connected:
+            self.ptu_status_label.setText("Connected")
+            self.ptu_status_label.setProperty("class", "status-connected")
+        else:
+            self.ptu_status_label.setText("Disconnected")
+            self.ptu_status_label.setProperty("class", "status-disconnected")
     
     def update_estop_status(self, active: bool):
         """Update E-Stop status."""

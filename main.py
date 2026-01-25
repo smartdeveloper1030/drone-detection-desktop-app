@@ -14,6 +14,7 @@ import torch
 
 from PyQt5.QtWidgets import QApplication
 from PyQt5.QtCore import QTimer, pyqtSignal, QObject
+from PyQt5.QtGui import QFont
 import cv2
 import numpy as np
 
@@ -392,6 +393,10 @@ class DroneDetectionApp:
     def __init__(self):
         """Initialize the application."""
         self.app = QApplication(sys.argv)
+        
+        # Load and apply dark mode stylesheet
+        self._load_stylesheet()
+        
         self.main_window = MainWindow()
         self.camera = CameraModule()
         self.detector = DetectionModule()
@@ -496,6 +501,20 @@ class DroneDetectionApp:
         self.PTU_TRACKING_STEP_PERCENTAGE = 0.15  # Move 15% of calculated offset per step (very smooth movement, more steps)
         self.PTU_TRACKING_MAX_STEP_DEGREES = 0.2  # Maximum step size in degrees (smaller steps for smoother movement)
         self.PTU_TRACKING_CONVERGENCE_THRESHOLD = 2.0  # Stop tracking when offset < 2 pixels
+    
+    def _load_stylesheet(self):
+        """Load and apply the dark mode stylesheet."""
+        import os
+        stylesheet_path = os.path.join(os.path.dirname(__file__), "styles.qss")
+        try:
+            with open(stylesheet_path, "r", encoding="utf-8") as f:
+                stylesheet = f.read()
+                self.app.setStyleSheet(stylesheet)
+                logger.info("Dark mode stylesheet loaded successfully")
+        except FileNotFoundError:
+            logger.warning(f"Stylesheet file not found: {stylesheet_path}")
+        except Exception as e:
+            logger.error(f"Error loading stylesheet: {str(e)}")
         
     def initialize(self) -> bool:
         """
