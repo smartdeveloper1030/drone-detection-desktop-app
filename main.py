@@ -23,7 +23,6 @@ from detection import DetectionModule, Detection
 from tracking import Tracker
 from ui.main_window import MainWindow
 from ptu_control import PTUControl
-from coordinate_converter import CoordinateConverter
 
 # Configure logging
 logging.basicConfig(
@@ -400,7 +399,6 @@ class DroneDetectionApp:
         
         # PTU control
         self.ptu = PTUControl()
-        self.coordinate_converter = None  # Will be initialized after camera connection
         self.ptu_tracking_enabled = False
         
         # Connect mode change signal
@@ -526,16 +524,6 @@ class DroneDetectionApp:
                 "Camera connected", "INFO"
             )
             
-            # Initialize coordinate converter with camera dimensions
-            frame_width, frame_height = self.camera.get_frame_size()
-            if frame_width > 0 and frame_height > 0:
-                self.coordinate_converter = CoordinateConverter(
-                    image_width=frame_width,
-                    image_height=frame_height,
-                    horizontal_fov=60.0,  # Default FOV, can be configured
-                    vertical_fov=45.0
-                )
-                logger.info(f"Coordinate converter initialized: {frame_width}x{frame_height}")
         else:
             logger.warning("Camera not connected - app will continue without video feed")
             self.main_window.get_system_view().update_camera_status(False)
@@ -1036,32 +1024,6 @@ class DroneDetectionApp:
         """Handle raw command sending (without waiting for Done response)."""
         if self.ptu.is_connected:
             self.ptu.send_raw_command(command)
-    
-    def _move_ptu_to_point(self, point: Tuple[float, float]):
-        """
-        Move PTU to track a predicted point.
-        
-        Args:
-            point: (x, y) pixel coordinates
-        """
-        if not self.ptu.is_connected or not self.coordinate_converter:
-            return
-        
-        pixel_x, pixel_y = point
-        current_azimuth, current_pitch = self.ptu.get_position()
-        
-        # Convert pixel to angle
-        new_azimuth, new_pitch = self.coordinate_converter.pixel_to_angle(
-            pixel_x, pixel_y, current_azimuth, current_pitch
-        )
-        
-        # Move PTU (with speed from UI)
-        ptu_view = self.main_window.get_ptu_control_view()
-        speed = getattr(ptu_view, 'current_speed', 20)
-        
-        success = self.ptu.move_to_position(new_azimuth, new_pitch, speed)
-        if success:
-            self.main_window.get_ptu_control_view().update_position(new_azimuth, new_pitch)
     
     def enable_ptu_tracking(self, enable: bool):
         """
