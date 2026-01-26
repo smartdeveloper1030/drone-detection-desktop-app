@@ -5,7 +5,7 @@ Matches the PTU control interface design from the manual.
 from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, 
                              QPushButton, QComboBox, QLineEdit, QGroupBox,
                              QGridLayout, QCheckBox, QTextEdit,
-                             QSpinBox, QDoubleSpinBox)
+                             QSpinBox, QDoubleSpinBox, QSizePolicy)
 from PyQt5.QtCore import Qt, pyqtSignal
 from PyQt5.QtGui import QFont
 from typing import Optional
@@ -41,28 +41,24 @@ class PTUControlView(QWidget):
         self.current_speed = 5
     
     def setup_ui(self):
-        """Set up the UI components matching the PTU control interface."""
+        """Set up the UI components with vertical sections: Serial Communication, PTU Control, Command History."""
         main_layout = QVBoxLayout()
         main_layout.setSpacing(10)
         main_layout.setContentsMargins(10, 10, 10, 10)
         
-        # Left and right panels layout
-        panels_layout = QHBoxLayout()
+        # Serial Communication panel (top)
+        serial_panel = self.create_serial_panel()
+        main_layout.addWidget(serial_panel)
         
-        # Left Panel - PTU Control
-        left_panel = self.create_control_panel()
-        panels_layout.addWidget(left_panel, 2)  # 2/3 width
+        # PTU Control panel (middle)
+        control_panel = self.create_control_panel()
+        main_layout.addWidget(control_panel)
         
-        # Right Panel - Programming
-        right_panel = self.create_programming_panel()
-        panels_layout.addWidget(right_panel, 1)  # 1/3 width
+        # Command History panel (bottom)
+        history_panel = self.create_programming_panel()
+        main_layout.addWidget(history_panel)
         
-        main_layout.addLayout(panels_layout)
-        
-        # Bottom Panel - Serial Communication
-        bottom_panel = self.create_serial_panel()
-        main_layout.addWidget(bottom_panel)
-        
+        main_layout.addStretch()
         self.setLayout(main_layout)
         
         # Set dark theme
@@ -283,37 +279,50 @@ class PTUControlView(QWidget):
     def create_serial_panel(self) -> QGroupBox:
         """Create the bottom serial communication panel."""
         panel = QGroupBox("Serial Communication")
-        layout = QHBoxLayout()
+        main_layout = QVBoxLayout()
+        main_layout.setSpacing(10)
+        
+        # Grid layout for labels and combos
+        grid_layout = QGridLayout()
+        grid_layout.setSpacing(10)
         
         # Serial port selection
-        port_label = QLabel("Serial Number:")
+        port_label = QLabel("Serial Port:")
         port_label.setStyleSheet("color: white;")
-        layout.addWidget(port_label)
+        grid_layout.addWidget(port_label, 0, 0)
         
         self.port_combo = QComboBox()
         self.port_combo.setMinimumWidth(150)
         self.port_combo.addItem("COM3")  # Default, will be updated
-        layout.addWidget(self.port_combo)
-        
-        # Connect button
-        self.connect_btn = QPushButton("Connect")
-        self.connect_btn.clicked.connect(self._on_connect_clicked)
-        layout.addWidget(self.connect_btn)
+        grid_layout.addWidget(self.port_combo, 0, 1)
         
         # Baud rate selection
         baud_label = QLabel("Baud Rate:")
         baud_label.setStyleSheet("color: white;")
-        layout.addWidget(baud_label)
+        grid_layout.addWidget(baud_label, 1, 0)
         
         self.baud_combo = QComboBox()
         self.baud_combo.addItems(["9600", "19200", "38400", "57600", "115200"])
         self.baud_combo.setCurrentText("9600")
         self.baud_combo.setMinimumWidth(100)
-        layout.addWidget(self.baud_combo)
+        grid_layout.addWidget(self.baud_combo, 1, 1)
         
-        layout.addStretch()
+        # Set column stretch to align combos
+        grid_layout.setColumnStretch(1, 1)
         
-        panel.setLayout(layout)
+        main_layout.addLayout(grid_layout)
+        
+        # Connect button row
+        button_layout = QHBoxLayout()
+        self.connect_btn = QPushButton("Connect")
+        self.connect_btn.clicked.connect(self._on_connect_clicked)
+        self.connect_btn.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+        button_layout.addWidget(self.connect_btn)
+        button_layout.addStretch()
+        main_layout.addLayout(button_layout)
+        
+        main_layout.addStretch()
+        panel.setLayout(main_layout)
         return panel
     
     # Event handlers

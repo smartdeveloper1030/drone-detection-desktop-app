@@ -1,5 +1,5 @@
 """
-Operator View - Live video feed with detection visualization.
+Camera View - Live video feed with detection visualization.
 """
 from PyQt5.QtWidgets import QWidget, QVBoxLayout, QLabel, QHBoxLayout, QSizePolicy
 from PyQt5.QtCore import Qt, QTimer, pyqtSignal
@@ -10,11 +10,11 @@ from typing import List, Optional
 from detection import Detection
 
 
-class OperatorView(QWidget):
-    """Operator view showing live video feed with detections."""
+class CameraView(QWidget):
+    """Camera view showing live video feed with detections."""
     
     def __init__(self, parent=None):
-        """Initialize the operator view."""
+        """Initialize the camera view."""
         super().__init__(parent)
         self.setup_ui()
         self.current_frame: Optional[np.ndarray] = None
@@ -43,7 +43,7 @@ class OperatorView(QWidget):
         self.video_label.setAlignment(Qt.AlignCenter)
         self.video_label.setMinimumSize(640, 360)  # 16:9 minimum size
         self.video_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
-        self.video_label.setStyleSheet("background-color: black;")
+        self.video_label.setProperty("class", "video-display")
         self.video_label.setText("Waiting for video feed...")
         layout.addWidget(self.video_label, stretch=1)  # Allow video to expand
         
@@ -51,15 +51,15 @@ class OperatorView(QWidget):
         info_layout = QHBoxLayout()
         
         self.fps_label = QLabel("FPS: 0.0")
-        self.fps_label.setStyleSheet("color: green; font-weight: bold;")
+        self.fps_label.setProperty("class", "fps-label")
         info_layout.addWidget(self.fps_label)
         
         self.detection_count_label = QLabel("Detections: 0")
-        self.detection_count_label.setStyleSheet("color: white;")
+        self.detection_count_label.setProperty("class", "detection-label")
         info_layout.addWidget(self.detection_count_label)
         
         self.classification_label = QLabel("Classification: -")
-        self.classification_label.setStyleSheet("color: yellow;")
+        self.classification_label.setProperty("class", "classification-label")
         info_layout.addWidget(self.classification_label)
         
         info_layout.addStretch()
@@ -453,4 +453,3 @@ class OperatorView(QWidget):
                 self.original_predicted_point,
                 self.original_servo_crosshair
             )
-
