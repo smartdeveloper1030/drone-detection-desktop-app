@@ -160,10 +160,25 @@ class DetectionProcessingThread(threading.Thread):
                 # Step 1: Run detection ONLY every N frames
                 if should_detect:
                     detections = self.detector.detect(frame)
-                    # Filter to keep only the largest detection (by area)
+                    # Filter detections based on mode
                     if detections:
-                        largest_detection = max(detections, key=lambda d: d.width * d.height)
-                        detections = [largest_detection]
+                        # In balloon mode: prioritize red balloons, fallback to largest balloon
+                        if Config.DETECT_MODE.lower() == "balloon":
+                            # Separate red balloons from other balloons
+                            red_balloons = [d for d in detections if d.color_class and d.color_class.lower() == 'red']
+                            
+                            if red_balloons:
+                                # If red balloons exist, pick the largest red balloon
+                                largest_detection = max(red_balloons, key=lambda d: d.width * d.height)
+                            else:
+                                # If no red balloons, pick the largest balloon overall
+                                largest_detection = max(detections, key=lambda d: d.width * d.height)
+                            
+                            detections = [largest_detection]
+                        else:
+                            # For other modes, keep only the largest detection (by area)
+                            largest_detection = max(detections, key=lambda d: d.width * d.height)
+                            detections = [largest_detection]
                     # Step 2: Update tracker with detections
                     tracks = self.tracker.update(detections, timestamp)
                 else:
