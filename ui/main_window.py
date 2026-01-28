@@ -128,9 +128,11 @@ class MainWindow(QMainWindow):
     
     def _update_color_selector_visibility(self):
         """Show/hide color selector based on current mode."""
+        # Hide color selector in balloon mode (red balloons are always prioritized)
         is_balloon_mode = self.mode_combo.currentText().lower() == "balloon"
-        self.color_label.setVisible(is_balloon_mode)
-        self.color_combo.setVisible(is_balloon_mode)
+        # Always hide color selector - balloon mode uses automatic red detection
+        self.color_label.setVisible(False)
+        self.color_combo.setVisible(False)
     
     def _on_color_changed(self, color: str):
         """Handle color selection change."""
