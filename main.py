@@ -24,6 +24,7 @@ from detection import DetectionModule, Detection
 from tracking import Tracker
 from ui.main_window import MainWindow
 from ptu_control import PTUControl
+from isapi_zoom import ISAPIZoom
 
 # Configure logging
 logging.basicConfig(
@@ -454,6 +455,19 @@ class DroneDetectionApp:
             ptu_view.add_command_history(command, status, response)
         
         self.ptu.set_history_callback(history_callback)
+
+        # Zoom (ISAPI) – step-by-step: each click = short zoom pulse then stop
+        self.zoom_client = ISAPIZoom()
+        self._zoom_stepping = False
+        self._zoom_step_timer = QTimer()
+        self._zoom_step_timer.setSingleShot(True)
+        self._zoom_step_timer.timeout.connect(self._on_zoom_step_timeout)
+        zv = self.main_window.get_zoom_view()
+        zv.connect_requested.connect(self._on_zoom_connect)
+        zv.disconnect_requested.connect(self._on_zoom_disconnect)
+        zv.zoom_in_requested.connect(self._on_zoom_in)
+        zv.zoom_out_requested.connect(self._on_zoom_out)
+        zv.zoom_stop_requested.connect(self._on_zoom_stop)
         
         # Processing state
         self.is_running = False
@@ -958,6 +972,10 @@ class DroneDetectionApp:
         if hasattr(self.ptu, 'cleanup'):
             self.ptu.cleanup()
         
+        self._zoom_step_timer.stop()
+        if self.zoom_client.is_connected:
+            self.zoom_client.disconnect()
+        
         logger.info("Cleanup complete")
     
     def _update_ptu_ports(self):
@@ -1058,6 +1076,83 @@ class DroneDetectionApp:
         """Handle raw command sending (without waiting for Done response)."""
         if self.ptu.is_connected:
             self.ptu.send_raw_command(command)
+
+    def _on_zoom_connect(self, ip: str, username: str, password: str):
+        """Handle Zoom (ISAPI) connection request."""
+        logger.info("Connecting to camera ISAPI at %s", ip)
+        ok, msg = self.zoom_client.connect(ip, username, password)
+        zv = self.main_window.get_zoom_view()
+        zv.update_connection_status(ok, msg if not ok else "")
+        if ok:
+            self.main_window.get_system_view().add_alert(f"Zoom (ISAPI) connected: {ip}", "INFO")
+        else:
+            self.main_window.get_system_view().add_alert(f"Zoom (ISAPI) failed: {msg}", "ERROR")
+
+    def _on_zoom_disconnect(self):
+        """Handle Zoom (ISAPI) disconnection request."""
+        logger.info("Disconnecting Zoom (ISAPI)")
+        self._zoom_step_timer.stop()
+        self._zoom_stepping = False
+        self.zoom_client.disconnect()
+        self.main_window.get_zoom_view().update_connection_status(False)
+        self.main_window.get_zoom_view().update_action("None")
+        self.main_window.get_system_view().add_alert("Zoom (ISAPI) disconnected", "INFO")
+
+    def _on_zoom_step_timeout(self):
+        """End step: stop zoom and clear stepping state."""
+        self._zoom_stepping = False
+        if self.zoom_client.is_connected:
+            self.zoom_client.zoom_stop()
+        self.main_window.get_zoom_view().update_action("None")
+
+    def _on_zoom_in(self, speed: int):
+        """Handle zoom-in step: start zoom in, stop after a short delay."""
+        zv = self.main_window.get_zoom_view()
+        if not self.zoom_client.is_connected:
+            zv.update_action("None")
+            return
+        if self._zoom_stepping:
+            return
+        self._zoom_stepping = True
+        ok, msg = self.zoom_client.zoom_in(speed)
+        if not ok:
+            self._zoom_stepping = False
+            zv.update_action("None")
+            self.main_window.get_system_view().add_alert(f"Zoom in failed: {msg}", "ERROR")
+            return
+        step_ms = 50 + max(0, min(100, speed)) * 2
+        self._zoom_step_timer.start(step_ms)
+
+    def _on_zoom_out(self, speed: int):
+        """Handle zoom-out step: start zoom out, stop after a short delay."""
+        zv = self.main_window.get_zoom_view()
+        if not self.zoom_client.is_connected:
+            zv.update_action("None")
+            return
+        if self._zoom_stepping:
+            return
+        self._zoom_stepping = True
+        ok, msg = self.zoom_client.zoom_out(speed)
+        if not ok:
+            self._zoom_stepping = False
+            zv.update_action("None")
+            self.main_window.get_system_view().add_alert(f"Zoom out failed: {msg}", "ERROR")
+            return
+        step_ms = 50 + max(0, min(100, speed)) * 2
+        self._zoom_step_timer.start(step_ms)
+
+    def _on_zoom_stop(self):
+        """Handle zoom stop: cancel step timer and stop zoom."""
+        self._zoom_step_timer.stop()
+        self._zoom_stepping = False
+        zv = self.main_window.get_zoom_view()
+        if not self.zoom_client.is_connected:
+            zv.update_action("None")
+            return
+        ok, msg = self.zoom_client.zoom_stop()
+        zv.update_action("None")
+        if not ok:
+            self.main_window.get_system_view().add_alert(f"Zoom stop failed: {msg}", "ERROR")
     
     def enable_ptu_tracking(self, enable: bool):
         """
