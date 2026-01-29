@@ -3,7 +3,7 @@ System View - System status, alerts, and configuration display.
 """
 from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, 
                              QTextEdit, QGroupBox, QGridLayout, QPushButton,
-                             QDoubleSpinBox, QSpinBox)
+                             QDoubleSpinBox, QSpinBox, QCheckBox)
 from PyQt5.QtCore import Qt, QTimer, pyqtSignal
 from PyQt5.QtGui import QColor, QPalette, QFont
 from datetime import datetime
@@ -74,21 +74,13 @@ class SystemView(QWidget):
         self.detection_status_label.setStyleSheet("color: yellow;")
         status_layout.addWidget(self.detection_status_label, 3, 1)
         
-        # Mode
-        mode_label = QLabel("Mode:")
-        mode_label.setStyleSheet("color: white;")
-        status_layout.addWidget(mode_label, 4, 0)
-        self.mode_label = QLabel("Drone/Balloon")
-        self.mode_label.setStyleSheet("color: white;")
-        status_layout.addWidget(self.mode_label, 4, 1)
-        
-        # Prediction horizon
-        prediction_label = QLabel("Prediction Horizon:")
-        prediction_label.setStyleSheet("color: white;")
-        status_layout.addWidget(prediction_label, 5, 0)
-        self.prediction_horizon_label = QLabel("0 ms")
-        self.prediction_horizon_label.setStyleSheet("color: white;")
-        status_layout.addWidget(self.prediction_horizon_label, 5, 1)
+        # PTU connection status
+        ptu_label = QLabel("PTU:")
+        ptu_label.setStyleSheet("color: white;")
+        status_layout.addWidget(ptu_label, 4, 0)
+        self.ptu_status_label = QLabel("Disconnected")
+        self.ptu_status_label.setProperty("class", "status-disconnected")
+        status_layout.addWidget(self.ptu_status_label, 4, 1)
         
         status_group.setLayout(status_layout)
         main_layout.addWidget(status_group)
@@ -97,31 +89,16 @@ class SystemView(QWidget):
         config_group = QGroupBox("Configuration")
         config_layout = QGridLayout()
         
-        test_mode_label = QLabel("Test Mode:")
-        test_mode_label.setStyleSheet("color: white;")
-        config_layout.addWidget(test_mode_label, 0, 0)
-        test_mode_text = "Enabled" if Config.TEST_OPTION else "Disabled"
-        test_mode_value = QLabel(test_mode_text)
-        test_mode_value.setStyleSheet("color: yellow;" if Config.TEST_OPTION else "color: green;")
-        config_layout.addWidget(test_mode_value, 0, 1)
-        
         camera_type_label = QLabel("Camera Type:")
         camera_type_label.setStyleSheet("color: white;")
-        config_layout.addWidget(camera_type_label, 1, 0)
+        config_layout.addWidget(camera_type_label, 0, 0)
         camera_type_value = QLabel(Config.CAMERA_TYPE.upper())
         camera_type_value.setStyleSheet("color: white;")
-        config_layout.addWidget(camera_type_value, 1, 1)
-        
-        yolo_model_label = QLabel("YOLO Model:")
-        yolo_model_label.setStyleSheet("color: white;")
-        config_layout.addWidget(yolo_model_label, 2, 0)
-        model_label = QLabel(Config.YOLO_MODEL_PATH)
-        model_label.setStyleSheet("color: white;")
-        config_layout.addWidget(model_label, 2, 1)
+        config_layout.addWidget(camera_type_value, 0, 1)
         
         conf_label = QLabel("Confidence Threshold:")
         conf_label.setStyleSheet("color: white;")
-        config_layout.addWidget(conf_label, 3, 0)
+        config_layout.addWidget(conf_label, 1, 0)
         self.conf_threshold_spinbox = QDoubleSpinBox()
         self.conf_threshold_spinbox.setMinimum(0.0)
         self.conf_threshold_spinbox.setMaximum(1.0)
@@ -145,11 +122,11 @@ class SystemView(QWidget):
             }
         """)
         self.conf_threshold_spinbox.valueChanged.connect(self._on_confidence_threshold_changed)
-        config_layout.addWidget(self.conf_threshold_spinbox, 3, 1)
+        config_layout.addWidget(self.conf_threshold_spinbox, 1, 1)
         
         pred_horizon_label = QLabel("Prediction Horizon:")
         pred_horizon_label.setStyleSheet("color: white;")
-        config_layout.addWidget(pred_horizon_label, 4, 0)
+        config_layout.addWidget(pred_horizon_label, 2, 0)
         self.pred_horizon_spinbox = QSpinBox()
         self.pred_horizon_spinbox.setMinimum(0)
         self.pred_horizon_spinbox.setMaximum(5000)
@@ -173,7 +150,7 @@ class SystemView(QWidget):
             }
         """)
         self.pred_horizon_spinbox.valueChanged.connect(self._on_prediction_horizon_changed)
-        config_layout.addWidget(self.pred_horizon_spinbox, 4, 1)
+        config_layout.addWidget(self.pred_horizon_spinbox, 2, 1)
         
         config_group.setLayout(config_layout)
         main_layout.addWidget(config_group)
@@ -184,7 +161,6 @@ class SystemView(QWidget):
         
         self.alert_text = QTextEdit()
         self.alert_text.setReadOnly(True)
-        self.alert_text.setMaximumHeight(200)
         self.alert_text.setStyleSheet("background-color: #1e1e1e; color: #00ff00;")  # Green text
         alerts_layout.addWidget(self.alert_text)
         
@@ -257,18 +233,19 @@ class SystemView(QWidget):
         """Update detection status."""
         if active:
             self.detection_status_label.setText("Active")
-            self.detection_status_label.setStyleSheet("color: green;")
+            self.detection_status_label.setProperty("class", "status-active")
         else:
             self.detection_status_label.setText("Inactive")
-            self.detection_status_label.setStyleSheet("color: yellow;")
+            self.detection_status_label.setProperty("class", "status-inactive")
     
-    def update_prediction_horizon(self, horizon_ms: int):
-        """Update prediction horizon."""
-        self.prediction_horizon_label.setText(f"{horizon_ms} ms")
-    
-    def update_mode(self, mode: str):
-        """Update detection mode."""
-        self.mode_label.setText(mode)
+    def update_ptu_status(self, connected: bool):
+        """Update PTU connection status."""
+        if connected:
+            self.ptu_status_label.setText("Connected")
+            self.ptu_status_label.setProperty("class", "status-connected")
+        else:
+            self.ptu_status_label.setText("Disconnected")
+            self.ptu_status_label.setProperty("class", "status-disconnected")
     
     def update_estop_status(self, active: bool):
         """Update E-Stop status."""

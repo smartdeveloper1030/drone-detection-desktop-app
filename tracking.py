@@ -405,15 +405,12 @@ class Tracker:
                     predictions.append(pred)
         return predictions
     
-    def get_primary_prediction(self, time_ahead_ms: float) -> Optional[Tuple[float, float]]:
+    def get_primary_track(self) -> Optional['Track']:
         """
-        Get primary predicted position (for blacklist/threat objects, or first track).
-        
-        Args:
-            time_ahead_ms: Time to predict ahead in milliseconds
+        Get primary track (largest object by area).
         
         Returns:
-            Predicted (x, y) position or None
+            Primary Track object or None
         """
         # Prioritize blacklist/threat tracks
         blacklist_tracks = [
@@ -422,21 +419,34 @@ class Tracker:
         ]
         
         if blacklist_tracks:
-            # Use the most recent/confident blacklist track
-            track = max(blacklist_tracks, key=lambda t: (t.hits, t.detection.confidence))
-            return track.predict(time_ahead_ms)
+            # Use the largest blacklist track (by area)
+            return max(blacklist_tracks, key=lambda t: t.detection.width * t.detection.height)
         
-        # Otherwise, use first confirmed track
+        # Otherwise, use largest confirmed track
         confirmed_tracks = [
             track for track in self.tracks.values()
             if track.hits >= self.min_hits
         ]
         
         if confirmed_tracks:
-            # Use the most confident track
-            track = max(confirmed_tracks, key=lambda t: t.detection.confidence)
-            return track.predict(time_ahead_ms)
+            # Use the largest track (by area)
+            return max(confirmed_tracks, key=lambda t: t.detection.width * t.detection.height)
         
+        return None
+    
+    def get_primary_prediction(self, time_ahead_ms: float) -> Optional[Tuple[float, float]]:
+        """
+        Get primary predicted position (for largest object).
+        
+        Args:
+            time_ahead_ms: Time to predict ahead in milliseconds
+        
+        Returns:
+            Predicted (x, y) position or None
+        """
+        primary_track = self.get_primary_track()
+        if primary_track:
+            return primary_track.predict(time_ahead_ms)
         return None
     
     def _is_blacklist(self, detection: Detection) -> bool:
@@ -453,6 +463,72 @@ class Tracker:
             return ColorClassifier.is_blacklist(detection.color_class)
         
         return False
+    
+    def predict_only(self, timestamp: Optional[float] = None) -> List[Track]:
+        """
+        Update tracker without new detections - only predict and age tracks.
+        Used for frames where detection is skipped but tracking/prediction continues.
+        
+        Args:
+            timestamp: Current timestamp (defaults to current time)
+            
+        Returns:
+            List of active tracks (with predicted positions)
+        """
+        if timestamp is None:
+            timestamp = time.time()
+        
+        dt = timestamp - self.last_timestamp if self.last_timestamp > 0 else 0.0
+        if dt <= 0:
+            dt = 0.033  # Default to ~30 FPS if invalid
+        self.last_timestamp = timestamp
+        
+        # Increment age for all tracks
+        for track in self.tracks.values():
+            track.increment_age()
+            
+            # Predict track position using Kalman Filter (no measurement update)
+            if track.kalman_filter and dt > 0:
+                # Only predict, don't update with measurement
+                track.kalman_filter.predict(dt)
+                # Update track's detection position to predicted position for display
+                predicted_x, predicted_y = track.kalman_filter.get_position()
+                # Create a synthetic detection for the predicted position
+                # Keep original detection properties but update position
+                track.detection = Detection(
+                    x=int(predicted_x),
+                    y=int(predicted_y),
+                    width=track.detection.width,
+                    height=track.detection.height,
+                    confidence=track.detection.confidence,
+                    class_id=track.detection.class_id,
+                    class_name=track.detection.class_name,
+                    color_class=track.detection.color_class,
+                    distance=track.detection.distance,
+                    track_id=track.track_id,
+                    velocity=track.velocity
+                )
+                # Update position history with predicted position
+                track.position_history.append((predicted_x, predicted_y, timestamp))
+                if len(track.position_history) > 10:
+                    track.position_history.pop(0)
+                track.last_timestamp = timestamp
+        
+        # Remove old tracks
+        tracks_to_remove = [
+            track_id for track_id, track in self.tracks.items()
+            if track.age > self.max_age
+        ]
+        for track_id in tracks_to_remove:
+            del self.tracks[track_id]
+        
+        # Return only confirmed tracks (with enough hits)
+        confirmed_tracks = [
+            track for track in self.tracks.values()
+            if track.hits >= self.min_hits
+        ]
+        
+        return confirmed_tracks
     
     def clear(self):
         """Clear all tracks."""

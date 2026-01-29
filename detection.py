@@ -225,11 +225,21 @@ class DetectionModule:
     def _get_device(self) -> str:
         """
         Get the device to use for inference.
+        Supports separate GPU for detection if available.
         
         Returns:
             str: Device string ("cpu", "cuda", "cuda:0", etc.)
         """
         device_config = Config.YOLO_DEVICE.lower()
+        
+        # Check if separate GPU is configured for detection
+        if torch.cuda.is_available() and Config.DETECTION_GPU_ID > 0:
+            if torch.cuda.device_count() > Config.DETECTION_GPU_ID:
+                device = f"cuda:{Config.DETECTION_GPU_ID}"
+                logger.info(f"Using separate GPU for detection: {device} (GPU: {torch.cuda.get_device_name(Config.DETECTION_GPU_ID)})")
+                return device
+            else:
+                logger.warning(f"Detection GPU ID {Config.DETECTION_GPU_ID} not available. Only {torch.cuda.device_count()} GPU(s) available.")
         
         # If device is explicitly set, use it
         if device_config in ["cpu", "cuda"]:
@@ -323,12 +333,28 @@ class DetectionModule:
                     model_path = 'models/yolov8n.pt'
             
             self.model = YOLO(model_path)
+            
+            # Try to export to TensorRT if enabled and GPU is available
+            if Config.YOLO_USE_TENSORRT and self.device.startswith("cuda"):
+                try:
+                    # Check if TensorRT model already exists
+                    tensorrt_model_path = model_path.replace('.pt', '_tensorrt.engine')
+                    if os.path.exists(tensorrt_model_path):
+                        logger.info(f"TensorRT model found at {tensorrt_model_path} (will use regular model with FP16)")
+                    else:
+                        logger.info("TensorRT model not found. Will use regular model with FP16 precision.")
+                except Exception as e:
+                    logger.warning(f"TensorRT initialization failed: {e}. Using regular model.")
+            
             # Move model to specified device (if supported)
             try:
                 self.model.to(self.device)
             except Exception as e:
                 logger.debug(f"Could not move model to device using .to() method: {e}. Device will be set during inference.")
+            
             logger.info(f"YOLO model loaded successfully on device: {self.device}")
+            if Config.YOLO_HALF_PRECISION and self.device.startswith("cuda"):
+                logger.info("Half precision (FP16) enabled for GPU inference")
             return True
         except Exception as e:
             logger.error(f"Error loading YOLO model: {str(e)}")
@@ -391,16 +417,21 @@ class DetectionModule:
             return []
         
         try:
-            # Run YOLO inference with optimized input size
-            # Using imgsz parameter to reduce input resolution for faster inference
-            results = self.model(
-                frame,
-                imgsz=Config.YOLO_INPUT_SIZE,  # Reduced input size (416 vs default 640) for better FPS
-                conf=self.confidence_threshold,
-                iou=self.iou_threshold,
-                device=self.device,  # Use configured device (GPU/CPU)
-                verbose=False
-            )
+            # Prepare inference arguments
+            inference_kwargs = {
+                'imgsz': Config.YOLO_INPUT_SIZE,  # Reduced input size (320 for lowest latency)
+                'conf': self.confidence_threshold,
+                'iou': self.iou_threshold,
+                'device': self.device,  # Use configured device (GPU/CPU)
+                'verbose': False
+            }
+            
+            # Enable half precision for GPU inference if configured
+            if Config.YOLO_HALF_PRECISION and self.device.startswith("cuda"):
+                inference_kwargs['half'] = True  # Use FP16 for faster inference
+            
+            # Run YOLO inference with optimized settings
+            results = self.model(frame, **inference_kwargs)
             
             detections = []
             
@@ -435,6 +466,7 @@ class DetectionModule:
                     # In production, you'd filter by class_id for balloon-specific classes
                     if 'balloon' in class_name.lower():
                         color_class = self.color_classifier.classify_color(frame, (x1, y1, x2, y2))
+                        # Note: In balloon mode, we detect all balloons and prioritize red in processing
                     
                     # Create detection object
                     detection = Detection(
@@ -514,10 +546,17 @@ class DetectionModule:
             # Drones are always blacklist
             if 'drone' in det.class_name.lower():
                 blacklist.append(det)
-            # Balloons: check color
+            # Balloons: in balloon mode, selected color is blacklist
             elif 'balloon' in det.class_name.lower() and det.color_class:
-                if self.color_classifier.is_blacklist(det.color_class):
-                    blacklist.append(det)
+                if Config.DETECT_MODE.lower() == "balloon":
+                    # In balloon mode, selected color is treated as blacklist
+                    selected_color = getattr(Config, 'SELECTED_BALLOON_COLOR', 'red').lower()
+                    if det.color_class.lower() == selected_color:
+                        blacklist.append(det)
+                else:
+                    # In other modes, use standard blacklist check
+                    if self.color_classifier.is_blacklist(det.color_class):
+                        blacklist.append(det)
         
         return blacklist
 

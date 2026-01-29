@@ -1,7 +1,7 @@
 """
-Operator View - Live video feed with detection visualization.
+Camera View - Live video feed with detection visualization.
 """
-from PyQt5.QtWidgets import QWidget, QVBoxLayout, QLabel, QHBoxLayout
+from PyQt5.QtWidgets import QWidget, QVBoxLayout, QLabel, QHBoxLayout, QSizePolicy
 from PyQt5.QtCore import Qt, QTimer, pyqtSignal
 from PyQt5.QtGui import QImage, QPixmap, QPainter, QPen, QColor, QFont
 import cv2
@@ -10,49 +10,56 @@ from typing import List, Optional
 from detection import Detection
 
 
-class OperatorView(QWidget):
-    """Operator view showing live video feed with detections."""
+class CameraView(QWidget):
+    """Camera view showing live video feed with detections."""
     
     def __init__(self, parent=None):
-        """Initialize the operator view."""
+        """Initialize the camera view."""
         super().__init__(parent)
         self.setup_ui()
         self.current_frame: Optional[np.ndarray] = None
         self.detections: List[Detection] = []
         self.predicted_point: Optional[tuple] = None  # (x, y)
         self.servo_crosshair: Optional[tuple] = None  # (x, y)
+        # Store original data for resize events
+        self.original_detections: List[Detection] = []
+        self.original_predicted_point: Optional[tuple] = None
+        self.original_servo_crosshair: Optional[tuple] = None
         self.fps = 0.0
         self.frame_count = 0
         self.fps_timer = QTimer()
         self.fps_timer.timeout.connect(self.update_fps_display)
         self.fps_timer.start(1000)  # Update every second
         self.last_time = None
+        self.frame_aspect_ratio: Optional[float] = None  # width/height ratio
+        self.target_aspect_ratio = 16.0 / 9.0  # 16:9 aspect ratio
         
     def setup_ui(self):
         """Set up the UI components."""
         layout = QVBoxLayout()
         
-        # Video display label
+        # Video display label - expand to fill available space with 16:9 aspect ratio
         self.video_label = QLabel()
         self.video_label.setAlignment(Qt.AlignCenter)
-        self.video_label.setMinimumSize(640, 480)
-        self.video_label.setStyleSheet("background-color: black;")
+        self.video_label.setMinimumSize(640, 360)  # 16:9 minimum size
+        self.video_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        self.video_label.setProperty("class", "video-display")
         self.video_label.setText("Waiting for video feed...")
-        layout.addWidget(self.video_label)
+        layout.addWidget(self.video_label, stretch=1)  # Allow video to expand
         
         # Info bar
         info_layout = QHBoxLayout()
         
         self.fps_label = QLabel("FPS: 0.0")
-        self.fps_label.setStyleSheet("color: green; font-weight: bold;")
+        self.fps_label.setProperty("class", "fps-label")
         info_layout.addWidget(self.fps_label)
         
         self.detection_count_label = QLabel("Detections: 0")
-        self.detection_count_label.setStyleSheet("color: white;")
+        self.detection_count_label.setProperty("class", "detection-label")
         info_layout.addWidget(self.detection_count_label)
         
         self.classification_label = QLabel("Classification: -")
-        self.classification_label.setStyleSheet("color: yellow;")
+        self.classification_label.setProperty("class", "classification-label")
         info_layout.addWidget(self.classification_label)
         
         info_layout.addStretch()
@@ -74,23 +81,49 @@ class OperatorView(QWidget):
             servo_crosshair: Servo crosshair position (x, y)
             prediction_horizon_ms: Prediction horizon in milliseconds
         """
+        # Store original frame for resize events (will be cropped later)
         self.current_frame = frame.copy()
-        self.detections = detections
-        self.predicted_point = predicted_point
-        self.servo_crosshair = servo_crosshair
+        self.original_detections = detections
+        self.original_predicted_point = predicted_point
+        self.original_servo_crosshair = servo_crosshair
         
         # Draw on frame
         display_frame = self.draw_detections(frame.copy(), detections, predicted_point, servo_crosshair, prediction_horizon_ms)
         
-        # Convert to QImage and display
-        height, width, channel = display_frame.shape
-        bytes_per_line = 3 * width
-        q_image = QImage(display_frame.data, width, height, bytes_per_line, QImage.Format_RGB888).rgbSwapped()
+        # Convert BGR to RGB for QImage (no color conversion in QImage creation)
+        display_frame_rgb = cv2.cvtColor(display_frame, cv2.COLOR_BGR2RGB)
         
-        # Scale to fit label while maintaining aspect ratio
+        # Convert to QImage and display
+        height, width, channel = display_frame_rgb.shape
+        bytes_per_line = 3 * width
+        
+        # Store frame aspect ratio (should be 16:9 now)
+        self.frame_aspect_ratio = self.target_aspect_ratio
+        
+        # Convert to contiguous array and then to bytes for QImage
+        q_image = QImage(np.ascontiguousarray(display_frame_rgb).tobytes(), width, height, bytes_per_line, QImage.Format_RGB888)
+        
+        # Scale to fit label while maintaining 16:9 aspect ratio
         pixmap = QPixmap.fromImage(q_image)
+        
+        # Get available label size
+        label_size = self.video_label.size()
+        
+        # Calculate scaled size maintaining 16:9 aspect ratio
+        label_aspect = label_size.width() / label_size.height() if label_size.height() > 0 else self.target_aspect_ratio
+        if label_aspect > self.target_aspect_ratio:
+            # Label is wider than 16:9 - fit to height
+            scaled_height = label_size.height()
+            scaled_width = int(scaled_height * self.target_aspect_ratio)
+        else:
+            # Label is taller than 16:9 - fit to width
+            scaled_width = label_size.width()
+            scaled_height = int(scaled_width / self.target_aspect_ratio)
+        
+        # Scale to calculated dimensions (maintains 16:9 aspect ratio)
         scaled_pixmap = pixmap.scaled(
-            self.video_label.size(),
+            scaled_width,
+            scaled_height,
             Qt.KeepAspectRatio,
             Qt.SmoothTransformation
         )
@@ -289,6 +322,107 @@ class OperatorView(QWidget):
                 line_thickness
             )
         
+        # Always draw center crosshair (matching image format)
+        center_x = int(frame_width / 2.0)
+        center_y = int(frame_height / 2.0)
+        
+        # Colors
+        red_color = (0, 0, 255)  # Bright red (BGR)
+        reddish_orange_color = (0, 50, 255)  # Reddish-orange (BGR)
+        green_color = (0, 255, 0)  # Vibrant green (BGR)
+        
+        # Thickness values
+        vertical_line_thickness = max(2, int(scale_factor * 2))  # Green vertical line thickness
+        radial_line_thickness = max(2, int(scale_factor * 2))  # Radial lines thickness
+        horizontal_line_thickness = max(2, int(scale_factor * 2))  # Green horizontal lines thickness
+        
+        # Calculate horizontal line length (will be used for vertical lines too)
+        horizontal_line_length = max(40, int(scale_factor * 60))
+        
+        # 2. Central reddish-orange circle with radial lines
+        inner_circle_radius = max(5, int(scale_factor * 8))
+        outer_circle_radius = max(10, int(scale_factor * 15))
+        radial_line_length = max(8, int(scale_factor * 12))
+        
+        # Draw outer faint circle outline
+        cv2.circle(frame, 
+                  (center_x, center_y), 
+                  outer_circle_radius, 
+                  reddish_orange_color, 
+                  max(1, int(scale_factor * 1)))
+        
+        # Draw inner circle
+        cv2.circle(frame, 
+                  (center_x, center_y), 
+                  inner_circle_radius, 
+                  reddish_orange_color, 
+                  radial_line_thickness)
+        
+        # Draw four short radial lines (up, down, left, right)
+        # Up
+        cv2.line(frame,
+                (center_x, center_y - inner_circle_radius),
+                (center_x, center_y - inner_circle_radius - radial_line_length),
+                reddish_orange_color,
+                radial_line_thickness)
+        # Down
+        cv2.line(frame,
+                (center_x, center_y + inner_circle_radius),
+                (center_x, center_y + inner_circle_radius + radial_line_length),
+                reddish_orange_color,
+                radial_line_thickness)
+        # Left
+        cv2.line(frame,
+                (center_x - inner_circle_radius, center_y),
+                (center_x - inner_circle_radius - radial_line_length, center_y),
+                reddish_orange_color,
+                radial_line_thickness)
+        # Right
+        cv2.line(frame,
+                (center_x + inner_circle_radius, center_y),
+                (center_x + inner_circle_radius + radial_line_length, center_y),
+                reddish_orange_color,
+                radial_line_thickness)
+        
+        # Calculate where green lines should start (at the edge of outer circle)
+        # Horizontal lines start point
+        left_start_x = center_x - inner_circle_radius - radial_line_length
+        right_start_x = center_x + inner_circle_radius + radial_line_length
+        
+        # Vertical lines start points (at outer circle edge)
+        top_start_y = center_y - outer_circle_radius
+        bottom_start_y = center_y + outer_circle_radius
+        
+        # 1. Draw green vertical lines (two segments: top and bottom, avoiding center circle)
+        # Top vertical line (above circle)
+        cv2.line(frame,
+                (center_x, top_start_y - horizontal_line_length),
+                (center_x, top_start_y),
+                green_color,
+                vertical_line_thickness)
+        
+        # Bottom vertical line (below circle)
+        cv2.line(frame,
+                (center_x, bottom_start_y),
+                (center_x, bottom_start_y + horizontal_line_length),
+                green_color,
+                vertical_line_thickness)
+        
+        # 3. Draw two longer green horizontal lines extending left and right
+        # Left horizontal line (extends from left radial line)
+        cv2.line(frame,
+                (left_start_x, center_y),
+                (left_start_x - horizontal_line_length, center_y),
+                green_color,
+                horizontal_line_thickness)
+        
+        # Right horizontal line (extends from right radial line)
+        cv2.line(frame,
+                (right_start_x, center_y),
+                (right_start_x + horizontal_line_length, center_y),
+                green_color,
+                horizontal_line_thickness)
+        
         return frame
     
     def _is_blacklist(self, detection: Detection) -> bool:
@@ -312,11 +446,10 @@ class OperatorView(QWidget):
         """Handle resize event to update video display."""
         super().resizeEvent(event)
         if self.current_frame is not None:
-            # Redraw the frame at new size
+            # Redraw the frame at new size using stored original data
             self.update_frame(
                 self.current_frame,
-                self.detections,
-                self.predicted_point,
-                self.servo_crosshair
+                self.original_detections,
+                self.original_predicted_point,
+                self.original_servo_crosshair
             )
-
