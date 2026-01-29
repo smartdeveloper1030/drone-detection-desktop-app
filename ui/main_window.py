@@ -7,6 +7,7 @@ from PyQt5.QtCore import Qt, pyqtSignal
 from ui.camera_view import CameraView
 from ui.system_view import SystemView
 from ui.ptu_control_view import PTUControlView
+from ui.zoom_view import ZoomView
 from config import Config
 
 
@@ -83,10 +84,12 @@ class MainWindow(QMainWindow):
         # Create views
         self.system_view = SystemView()
         self.ptu_control_view = PTUControlView()
+        self.zoom_view = ZoomView()
         
         # Add tabs
         self.tab_widget.addTab(self.system_view, "Status")
         self.tab_widget.addTab(self.ptu_control_view, "PTU")
+        self.tab_widget.addTab(self.zoom_view, "Zoom")
         
         # Add to splitter: Left (camera) | Right (tabs)
         main_splitter.addWidget(self.camera_view)
@@ -177,7 +180,11 @@ class MainWindow(QMainWindow):
     def get_ptu_control_view(self) -> PTUControlView:
         """Get the PTU control view."""
         return self.ptu_control_view
-    
+
+    def get_zoom_view(self) -> ZoomView:
+        """Get the zoom control view."""
+        return self.zoom_view
+
     def showEvent(self, event):
         """Override showEvent to set splitter sizes after window is shown."""
         super().showEvent(event)
